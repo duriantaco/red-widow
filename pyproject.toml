@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "red-widow"
+version = "0.1.0"
+description = "VSIX, IDE extension, and AI developer workflow security scanner."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Red Widow contributors" }]
+keywords = [
+  "ai-security",
+  "developer-security",
+  "ide-security",
+  "supply-chain-security",
+  "vscode",
+  "vsix",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Utilities",
+]
+
+[project.scripts]
+red-widow = "red_widow.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["red_widow*"]
+
+[tool.setuptools.package-data]
+red_widow = ["dynamic/*.js"]
