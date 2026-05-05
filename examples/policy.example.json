@@ -1,0 +1,28 @@
+{
+  "maxSeverity": "medium",
+  "maxRiskScore": 9,
+  "allowActivationStar": false,
+  "allowNativeBinaries": false,
+  "denyFindings": [
+    "child-process-use",
+    "private-key",
+    "github-token",
+    "openai-key",
+    "sensitive-file-bundled"
+  ],
+  "blockDomains": [
+    "*.invalid",
+    "*.example"
+  ],
+  "blockPublishers": [
+    "unknown-*"
+  ],
+  "exceptions": [
+    {
+      "extension": "ms-python.*",
+      "ruleId": "native-binary",
+      "scope": "dependency",
+      "reason": "Python tooling legitimately bundles platform-specific helper binaries; review versions separately."
+    }
+  ]
+}
