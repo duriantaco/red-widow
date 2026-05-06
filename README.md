@@ -184,6 +184,10 @@ When running from a checkout instead of an installed package, replace
 python3 -m red_widow
 ```
 
+Release instructions live in [`docs/release.md`](docs/release.md). Red Widow is
+intended to publish through PyPI Trusted Publishing from GitHub Releases, not
+through long-lived local PyPI tokens.
+
 The dynamic sandbox creates a fake workspace with canary secrets, loads the
 extension activation entry point through an instrumented Node harness, blocks
 process and network calls, and reports proof when an extension reads canary
