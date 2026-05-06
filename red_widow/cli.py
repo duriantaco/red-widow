@@ -22,9 +22,15 @@ from .baseline import (
 )
 from .dynamic.models import DynamicRunReport, DynamicViolation
 from .dynamic.runner import DynamicRunOptions, run_extension
+from .enterprise import vscode_allowed_extensions_policy
 from .gate import GateItem, GateReport, run_gate
+from .inventory import (
+    inventory_report_markdown,
+    inventory_report_text,
+    make_inventory_report,
+)
 from .models import DiffReport, Finding, PolicyViolation, SCHEMA_VERSION, ScanReport, SEVERITY_ORDER
-from .output import inventory_markdown, inventory_text, sarif_report
+from .output import gate_markdown, gate_sarif_report, inventory_markdown, inventory_text, sarif_report
 from .policy import evaluate_policy, load_policy
 from .scanner import (
     diff_targets,
@@ -60,6 +66,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_approve_command(argv[1:])
     if argv and argv[0] == "agent":
         return _run_agent_command(argv[1:])
+    if argv and argv[0] == "inventory":
+        return _run_inventory_command(argv[1:])
+    if argv and argv[0] == "export":
+        return _run_export_command(argv[1:])
 
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -460,6 +470,81 @@ def _build_agent_command_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_inventory_command(argv: list[str]) -> int:
+    parser = _build_inventory_command_parser()
+    args = parser.parse_args(argv)
+    output_format = "json" if args.json else args.format
+
+    try:
+        gate = run_gate(
+            targets=args.targets,
+            workspaces=args.workspace or [Path.cwd()],
+            recommendation_paths=args.recommendations,
+            installed=not args.no_installed,
+            extension_roots=args.extension_root,
+            policy=load_policy(args.policy) if args.policy else {},
+            lockfile=_load_gate_lockfile(_defaulted_lockfile_path(args.lockfile)),
+            offline=not args.online,
+        )
+        report = make_inventory_report(gate)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"red-widow inventory: {exc}", file=sys.stderr)
+        return 1
+
+    if output_format == "json":
+        print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    elif output_format == "markdown":
+        print(inventory_report_markdown(report), end="")
+    else:
+        print(inventory_report_text(report), end="")
+    return 1 if report.gate.scan_errors else 0
+
+
+def _build_inventory_command_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="red-widow inventory",
+        description="Collect IDE extension, MCP, and AI developer workflow inventory for a machine or workspace.",
+    )
+    parser.add_argument("targets", nargs="*", help="VSIX files or unpacked extension directories to include")
+    parser.add_argument(
+        "--workspace",
+        action="append",
+        default=[],
+        help="workspace directory to inventory; defaults to the current directory",
+    )
+    parser.add_argument(
+        "--recommendations",
+        action="append",
+        default=[],
+        help="explicit VS Code extensions.json recommendations file to include; may be repeated",
+    )
+    parser.add_argument(
+        "--no-installed",
+        action="store_true",
+        help="skip locally installed VS Code-compatible extensions and global AI IDE config",
+    )
+    parser.add_argument(
+        "--extension-root",
+        action="append",
+        default=[],
+        help="additional installed-extension root to search; may be repeated",
+    )
+    parser.add_argument("--policy", help="evaluate a JSON policy against scanned extensions")
+    parser.add_argument(
+        "--lockfile",
+        help=f"validate scanned extensions and recommendations from a lockfile; defaults to {DEFAULT_LOCKFILE} when present",
+    )
+    parser.add_argument("--online", action="store_true", help="resolve recommended extensions from marketplaces")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    parser.add_argument(
+        "--format",
+        choices=["text", "json", "markdown"],
+        default="text",
+        help="output format for inventory",
+    )
+    return parser
+
+
 def _run_gate_command(argv: list[str]) -> int:
     parser = _build_gate_command_parser()
     args = parser.parse_args(argv)
@@ -510,7 +595,7 @@ def _build_gate_command_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
     parser.add_argument(
         "--format",
-        choices=["text", "json"],
+        choices=["text", "json", "markdown", "sarif"],
         default="text",
         help="output format for gate results",
     )
@@ -544,6 +629,10 @@ def _load_gate_lockfile(lockfile_path: Path | None) -> dict[str, Any]:
 def _emit_gate_command_output(report: GateReport, output_format: str) -> None:
     if output_format == "json":
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+    elif output_format == "markdown":
+        print(gate_markdown(report), end="")
+    elif output_format == "sarif":
+        print(json.dumps(gate_sarif_report(report), indent=2, sort_keys=True))
     else:
         _print_gate_report(report)
 
@@ -684,6 +773,69 @@ def _approve_command_exit(report: GateReport) -> int:
     if report.scan_errors:
         return 1
     return 0
+
+
+def _run_export_command(argv: list[str]) -> int:
+    parser = _build_export_command_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        if args.export_command == "vscode-allowed":
+            lockfile = _load_gate_lockfile(Path(args.lockfile).expanduser())
+            payload = vscode_allowed_extensions_policy(
+                lockfile,
+                block_unlisted=not args.allow_unlisted,
+                pin_versions=not args.no_pin_versions,
+            )
+            output = payload["settings"] if args.format == "settings-json" else payload
+            text = json.dumps(output, indent=2, sort_keys=True) + "\n"
+            if args.output:
+                Path(args.output).expanduser().write_text(text, encoding="utf-8")
+            else:
+                print(text, end="")
+            return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"red-widow export: {exc}", file=sys.stderr)
+        return 1
+
+    parser.print_help(sys.stderr)
+    return 2
+
+
+def _build_export_command_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="red-widow export",
+        description="Export Red Widow approvals into enterprise policy formats.",
+    )
+    subparsers = parser.add_subparsers(dest="export_command", required=True)
+
+    vscode = subparsers.add_parser(
+        "vscode-allowed",
+        help="export a VS Code extensions.allowed policy from a Red Widow lockfile",
+    )
+    vscode.add_argument(
+        "--lockfile",
+        default=DEFAULT_LOCKFILE,
+        help=f"lockfile to export; defaults to {DEFAULT_LOCKFILE}",
+    )
+    vscode.add_argument(
+        "--allow-unlisted",
+        action="store_true",
+        help="do not add an explicit '*' block entry for unapproved extensions",
+    )
+    vscode.add_argument(
+        "--no-pin-versions",
+        action="store_true",
+        help="allow approved extension IDs without pinning to lockfile versions",
+    )
+    vscode.add_argument(
+        "--format",
+        choices=["json", "settings-json"],
+        default="json",
+        help="output the full Red Widow envelope or just the VS Code settings object",
+    )
+    vscode.add_argument("--output", help="write output to a file instead of stdout")
+    return parser
 
 
 def _defaulted_lockfile_path(path: str | None) -> Path | None:
