@@ -118,6 +118,11 @@ Export approved extensions into VS Code enterprise `extensions.allowed` policy:
 red-widow export vscode-allowed --lockfile red-widow.lock.json --format settings-json
 ```
 
+Run Red Widow inside VS Code with the editor extension in
+[`vscode-extension/`](vscode-extension/). The extension runs the local CLI,
+shows the gate decision in the status bar, and adds Problems diagnostics for
+blocking and review findings. See [`docs/vscode-extension.md`](docs/vscode-extension.md).
+
 Run a VSIX in a canary sandbox:
 
 ```bash
