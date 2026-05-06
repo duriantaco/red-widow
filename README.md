@@ -62,6 +62,18 @@ Before push or in CI, make review items blocking:
 red-widow gate --policy examples/policy.example.json --fail-on-review
 ```
 
+Use the first-party GitHub Action in CI:
+
+```yaml
+- uses: red-widow/red-widow@v1
+  with:
+    workspace: .
+    policy: examples/policy.example.json
+    offline: "true"
+    fail-on-review: "true"
+    upload-sarif: "true"
+```
+
 Stay local-only when you do not want network access:
 
 ```bash
@@ -97,6 +109,13 @@ config:
 
 ```bash
 red-widow gate --installed
+red-widow inventory --format json
+```
+
+Export approved extensions into VS Code enterprise `extensions.allowed` policy:
+
+```bash
+red-widow export vscode-allowed --lockfile red-widow.lock.json --format settings-json
 ```
 
 Run a VSIX in a canary sandbox:
@@ -129,6 +148,8 @@ red-widow ./extension.vsix --write-lockfile extensions.lock.json
 red-widow ./extension.vsix --lockfile extensions.lock.json
 red-widow approve --json
 red-widow approve --lockfile red-widow.lock.json
+red-widow inventory --format markdown
+red-widow export vscode-allowed --format json
 red-widow gate --workspace .
 red-widow gate --offline
 red-widow gate --installed --policy examples/policy.example.json

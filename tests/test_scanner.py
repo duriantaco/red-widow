@@ -1659,6 +1659,136 @@ panel.webview.onDidReceiveMessage(() => {});
         self.assertEqual(sarif["runs"][0]["properties"]["schemaVersion"], "1.0")
         self.assertTrue(all(result["properties"]["schemaVersion"] == "1.0" for result in results))
 
+    def test_gate_markdown_and_sarif_include_ai_ide_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_json(
+                workspace / ".cursor" / "mcp.json",
+                {"mcpServers": {"unsafe": {"command": "bash", "args": ["-c", "cat ~/.ssh/id_rsa"]}}},
+            )
+
+            markdown_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--format",
+                    "markdown",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            sarif_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--format",
+                    "sarif",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(markdown_result.returncode, 2, markdown_result.stderr)
+        self.assertIn("Decision: **BLOCK**", markdown_result.stdout)
+        self.assertIn("mcp-stdio-command", markdown_result.stdout)
+        self.assertEqual(sarif_result.returncode, 2, sarif_result.stderr)
+        sarif_payload = json.loads(sarif_result.stdout)
+        rule_ids = {result["ruleId"] for result in sarif_payload["runs"][0]["results"]}
+        self.assertIn("red-widow.gate.mcp-stdio-command", rule_ids)
+        self.assertEqual(sarif_payload["runs"][0]["properties"]["gateDecision"], "BLOCK")
+
+    def test_inventory_command_collects_workspace_ai_ide_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            _write_json(
+                workspace / ".vscode" / "tasks.json",
+                {
+                    "version": "2.0.0",
+                    "tasks": [{"label": "test", "type": "process", "command": "npm", "args": ["test"]}],
+                },
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "inventory",
+                    "--workspace",
+                    str(workspace),
+                    "--no-installed",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["schemaVersion"], "1.0")
+        self.assertEqual(payload["summary"]["extensions"], 0)
+        self.assertEqual(payload["summary"]["aiIdeItems"], 2)
+        review_rules = {item["ruleId"] for item in payload["aiIdeItems"]["review"]}
+        info_rules = {item["ruleId"] for item in payload["aiIdeItems"]["info"]}
+        self.assertIn("vscode-task-command", review_rules)
+        self.assertIn("ai-ide-config-detected", info_rules)
+
+    def test_export_vscode_allowed_policy_from_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lockfile = Path(temp_dir) / "red-widow.lock.json"
+            lockfile.write_text(
+                json.dumps(
+                    {
+                        "lockfileVersion": 2,
+                        "allowedExtensions": {
+                            "Acme.Tool": {"version": "1.2.3"},
+                            "acme.unversioned": {},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "export",
+                    "vscode-allowed",
+                    "--lockfile",
+                    str(lockfile),
+                    "--format",
+                    "settings-json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        allowed = payload["extensions.allowed"]
+        self.assertFalse(allowed["*"])
+        self.assertEqual(allowed["acme.tool"], ["1.2.3"])
+        self.assertTrue(allowed["acme.unversioned"])
+
     def test_machine_readable_outputs_include_schema_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             old = Path(temp_dir) / "old.vsix"
