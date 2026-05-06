@@ -202,7 +202,7 @@ def run_gate(
     )
 
     recommendations = _load_recommendations(inputs.workspaces, inputs.recommendations)
-    _set_recommendations(report, recommendations)
+    _set_recommendations(report, recommendations, lockfile)
 
     _resolve_gate_marketplace_packages(
         report,
@@ -299,7 +299,7 @@ def _resolve_gate_marketplace_packages(
     report.marketplace_packages = packages
     report.marketplace_errors = errors
     _scan_marketplace_packages(report, packages, continue_on_error=options.continue_on_error)
-    _set_recommendations(report, recommendations)
+    _set_recommendations(report, recommendations, options.lockfile)
 
 
 def _scan_marketplace_packages(
@@ -322,8 +322,10 @@ def _scan_marketplace_packages(
 def _set_recommendations(
     report: GateReport,
     recommendations: list[ExtensionRecommendation],
+    lockfile: dict[str, Any] | None = None,
 ) -> None:
     resolved_ids = {scan.extension_id.lower() for scan in report.reports}
+    resolved_ids.update(_allowed_lockfile_extensions(lockfile or {}))
     report.recommendations = [
         ExtensionRecommendation(
             extension_id=recommendation.extension_id,
