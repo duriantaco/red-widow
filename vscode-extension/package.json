@@ -2,7 +2,7 @@
   "name": "red-widow",
   "displayName": "Red Widow",
   "description": "Gate VS Code-compatible IDE extensions, MCP config, and AI developer workflow risk from inside the editor.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "red-widow",
   "license": "MIT",
   "engines": {
