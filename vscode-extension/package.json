@@ -1,0 +1,110 @@
+{
+  "name": "red-widow",
+  "displayName": "Red Widow",
+  "description": "Gate VS Code-compatible IDE extensions, MCP config, and AI developer workflow risk from inside the editor.",
+  "version": "0.1.0",
+  "publisher": "red-widow",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "security",
+    "mcp",
+    "vsix",
+    "developer-security",
+    "ai-security"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:redWidow.runGate",
+    "onCommand:redWidow.openReport",
+    "workspaceContains:.vscode/extensions.json",
+    "workspaceContains:.vscode/mcp.json",
+    "workspaceContains:AGENTS.md"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "redWidow.runGate",
+        "title": "Red Widow: Run Gate",
+        "category": "Red Widow",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "redWidow.openReport",
+        "title": "Red Widow: Open Last Report",
+        "category": "Red Widow",
+        "icon": "$(output)"
+      }
+    ],
+    "configuration": {
+      "title": "Red Widow",
+      "properties": {
+        "redWidow.cliPath": {
+          "type": "string",
+          "default": "red-widow",
+          "description": "Path to the Red Widow CLI executable."
+        },
+        "redWidow.cliArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional arguments inserted before the Red Widow subcommand, such as [\"-m\", \"red_widow\"] when cliPath is python3."
+        },
+        "redWidow.policy": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Red Widow policy JSON path, relative to the workspace or absolute."
+        },
+        "redWidow.lockfile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Red Widow lockfile path, relative to the workspace or absolute. Red Widow still auto-detects red-widow.lock.json when this is empty."
+        },
+        "redWidow.offline": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the gate in offline mode and skip marketplace resolution."
+        },
+        "redWidow.failOnReview": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat REVIEW decisions as failing gate runs."
+        },
+        "redWidow.includeInstalled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include locally installed VS Code-compatible extensions and global Cursor/Windsurf MCP config."
+        },
+        "redWidow.runOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Red Widow automatically when a workspace opens."
+        },
+        "redWidow.watchWorkspaceConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch IDE workflow configuration files and rerun Red Widow when they change."
+        },
+        "redWidow.maxDiagnostics": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "description": "Maximum number of Problems diagnostics created from a gate report."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --check extension.js"
+  },
+  "devDependencies": {}
+}
