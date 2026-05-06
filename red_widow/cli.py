@@ -44,6 +44,11 @@ from .scanner import (
 DEFAULT_LOCKFILE = "red-widow.lock.json"
 
 
+class RedWidowHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    def __init__(self, prog: str) -> None:
+        super().__init__(prog, max_help_position=28, width=96)
+
+
 @dataclass
 class ScanCommandState:
     reports: list[ScanReport]
@@ -298,50 +303,69 @@ def _scan_command_exit(args: argparse.Namespace, state: ScanCommandState) -> int
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow",
-        description="Scan VS Code-compatible extension packages and directories.",
+        formatter_class=RedWidowHelpFormatter,
+        description="""Red Widow scans IDE extensions and AI developer workflow risk.
+
+Common commands:
+  red-widow gate           Gate current repo before merge or CI
+  red-widow inventory      Collect extension, MCP, and agent-workflow inventory
+  red-widow run            Run a VSIX in a canary sandbox
+  red-widow approve        Write red-widow.lock.json approvals
+  red-widow agent          Seed or check coding-agent canary probes
+  red-widow export         Export enterprise policy
+
+Examples:
+  red-widow gate --offline
+  red-widow ./extension.vsix
+  red-widow inventory --format json
+""",
     )
-    parser.add_argument("targets", nargs="*", help="VSIX files or unpacked extension directories to scan")
+    parser.add_argument("targets", nargs="*", metavar="TARGET", help="VSIX files or extension dirs")
     parser.add_argument("--installed", action="store_true", help="scan locally installed VS Code-compatible extensions")
     parser.add_argument(
         "--extension-root",
         action="append",
         default=[],
-        help="additional installed-extension root to search; may be repeated",
+        metavar="DIR",
+        help="extra installed-extension root",
     )
-    parser.add_argument("--diff", nargs=2, metavar=("OLD", "NEW"), help="diff two VSIX files or extension directories")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    parser.add_argument("--diff", nargs=2, metavar=("OLD", "NEW"), help="diff two extension packages or dirs")
+    parser.add_argument("--json", action="store_true", help="alias for --format json")
     parser.add_argument(
         "--format",
         choices=["text", "json", "inventory", "markdown", "sarif"],
+        metavar="FORMAT",
         default="text",
-        help="output format for scan results",
+        help="text, json, inventory, markdown, or sarif",
     )
-    parser.add_argument("--lockfile", help="validate scanned extensions against a lockfile")
-    parser.add_argument("--write-lockfile", help="write a lockfile for scanned extensions")
-    parser.add_argument("--reviewed-by", default="", help="reviewer name or email to record in written lockfiles")
-    parser.add_argument("--policy", help="enforce a JSON policy file against scanned extensions")
-    parser.add_argument("--baseline", help="suppress findings and policy violations found in a baseline")
-    parser.add_argument("--write-baseline", help="write a baseline for the current scan results")
+    parser.add_argument("--lockfile", metavar="FILE", help="validate against a lockfile")
+    parser.add_argument("--write-lockfile", metavar="FILE", help="write a lockfile")
+    parser.add_argument("--reviewed-by", metavar="NAME", default="", help="reviewer for written lockfiles")
+    parser.add_argument("--policy", metavar="FILE", help="enforce policy JSON")
+    parser.add_argument("--baseline", metavar="FILE", help="suppress baseline findings")
+    parser.add_argument("--write-baseline", metavar="FILE", help="write a baseline")
     parser.add_argument(
         "--continue-on-error",
         action="store_true",
-        help="continue scanning remaining targets when a target cannot be parsed",
+        help="continue after malformed targets",
     )
     parser.add_argument(
         "--fail-on",
+        metavar="LEVEL",
         choices=["low", "medium", "high", "critical"],
-        help="exit with code 2 when any report reaches this severity",
+        help="fail on severity: low, medium, high, critical",
     )
-    parser.add_argument("--max-findings", type=int, default=50, help="maximum findings to print per report")
+    parser.add_argument("--max-findings", metavar="N", type=int, default=50, help="max findings to print")
     return parser
 
 
 def _run_dynamic_command(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="red-widow run",
+        formatter_class=RedWidowHelpFormatter,
         description="Run a VS Code-compatible extension in a Red Widow canary sandbox.",
     )
-    parser.add_argument("target", help="VSIX file or unpacked extension directory to run")
+    parser.add_argument("target", metavar="TARGET", help="VSIX file or extension dir")
     parser.add_argument(
         "--sandbox",
         action="store_true",
@@ -351,17 +375,18 @@ def _run_dynamic_command(argv: list[str]) -> int:
     parser.add_argument(
         "--format",
         choices=["text", "json"],
+        metavar="FORMAT",
         default="text",
-        help="output format for dynamic proof results",
+        help="text or json",
     )
-    parser.add_argument("--timeout", type=int, default=10, help="maximum harness runtime in seconds")
+    parser.add_argument("--timeout", metavar="SEC", type=int, default=10, help="harness timeout")
     parser.add_argument(
         "--keep-run",
         action="store_true",
         help="preserve the run directory under .red-widow/runs for replay inspection",
     )
-    parser.add_argument("--run-root", help="directory for preserved run artifacts")
-    parser.add_argument("--node", default="node", help="node executable to use for the extension harness")
+    parser.add_argument("--run-root", metavar="DIR", help="directory for preserved run artifacts")
+    parser.add_argument("--node", metavar="EXE", default="node", help="Node executable")
     args = parser.parse_args(argv)
 
     try:
@@ -434,39 +459,53 @@ def _run_agent_command(argv: list[str]) -> int:
 def _build_agent_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow agent",
+        formatter_class=RedWidowHelpFormatter,
         description="Seed and check AI coding-agent canary probes.",
     )
     subparsers = parser.add_subparsers(dest="agent_command", required=True)
 
-    seed = subparsers.add_parser("seed", help="create a canary workspace for an AI coding agent run")
-    seed.add_argument("workspace", help="empty directory where the canary workspace should be created")
+    seed = subparsers.add_parser(
+        "seed",
+        formatter_class=RedWidowHelpFormatter,
+        help="create a canary workspace for an AI coding agent run",
+    )
+    seed.add_argument("workspace", metavar="DIR", help="empty workspace dir")
     seed.add_argument(
         "--reveal-marker",
         action="store_true",
         help="print the raw canary marker; default output redacts it",
     )
-    seed.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
-    seed.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+    seed.add_argument("--json", action="store_true", help="alias for --format json")
+    seed.add_argument("--format", choices=["text", "json"], metavar="FORMAT", default="text", help="text or json")
 
-    check = subparsers.add_parser("check", help="check an agent transcript or tool trace for canary leaks")
-    check.add_argument("trace", help="agent transcript, command log, or JSONL tool trace to check")
+    check = subparsers.add_parser(
+        "check",
+        formatter_class=RedWidowHelpFormatter,
+        help="check an agent transcript or tool trace for canary leaks",
+    )
+    check.add_argument("trace", metavar="TRACE", help="transcript, command log, or JSONL trace")
     check.add_argument(
         "--workspace",
+        metavar="DIR",
         help="agent probe workspace; defaults to marker-only checks unless provided",
     )
-    check.add_argument("--marker", help="explicit Red Widow canary marker to check for disclosure")
-    check.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
-    check.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+    check.add_argument("--marker", metavar="VALUE", help="explicit canary marker")
+    check.add_argument("--json", action="store_true", help="alias for --format json")
+    check.add_argument("--format", choices=["text", "json"], metavar="FORMAT", default="text", help="text or json")
 
-    show = subparsers.add_parser("show", help="print the saved probe task and metadata")
-    show.add_argument("workspace", help="agent probe workspace")
+    show = subparsers.add_parser(
+        "show",
+        formatter_class=RedWidowHelpFormatter,
+        help="print the saved probe task and metadata",
+    )
+    show.add_argument("workspace", metavar="DIR", help="agent probe workspace")
     show.add_argument(
         "--reveal-marker",
         action="store_true",
         help="print the raw canary marker; default output redacts it",
     )
-    show.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
-    show.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+    show.add_argument("--json", action="store_true", help="alias for --format json")
+    show.add_argument("--format", choices=["text", "json"], metavar="FORMAT", default="text", help="text or json")
     return parser
 
 
@@ -503,44 +542,50 @@ def _run_inventory_command(argv: list[str]) -> int:
 def _build_inventory_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow inventory",
+        formatter_class=RedWidowHelpFormatter,
         description="Collect IDE extension, MCP, and AI developer workflow inventory for a machine or workspace.",
     )
-    parser.add_argument("targets", nargs="*", help="VSIX files or unpacked extension directories to include")
+    parser.add_argument("targets", nargs="*", metavar="TARGET", help="VSIX files or extension dirs")
     parser.add_argument(
         "--workspace",
         action="append",
         default=[],
-        help="workspace directory to inventory; defaults to the current directory",
+        metavar="DIR",
+        help="workspace dir",
     )
     parser.add_argument(
         "--recommendations",
         action="append",
         default=[],
-        help="explicit VS Code extensions.json recommendations file to include; may be repeated",
+        metavar="FILE",
+        help="VS Code extensions.json file",
     )
     parser.add_argument(
         "--no-installed",
         action="store_true",
-        help="skip locally installed VS Code-compatible extensions and global AI IDE config",
+        help="skip installed extensions and global AI IDE config",
     )
     parser.add_argument(
         "--extension-root",
         action="append",
         default=[],
-        help="additional installed-extension root to search; may be repeated",
+        metavar="DIR",
+        help="extra installed-extension root",
     )
-    parser.add_argument("--policy", help="evaluate a JSON policy against scanned extensions")
+    parser.add_argument("--policy", metavar="FILE", help="evaluate policy JSON")
     parser.add_argument(
         "--lockfile",
-        help=f"validate scanned extensions and recommendations from a lockfile; defaults to {DEFAULT_LOCKFILE} when present",
+        metavar="FILE",
+        help=f"validate lockfile; defaults to {DEFAULT_LOCKFILE} when present",
     )
     parser.add_argument("--online", action="store_true", help="resolve recommended extensions from marketplaces")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    parser.add_argument("--json", action="store_true", help="alias for --format json")
     parser.add_argument(
         "--format",
         choices=["text", "json", "markdown"],
+        metavar="FORMAT",
         default="text",
-        help="output format for inventory",
+        help="text, json, or markdown",
     )
     return parser
 
@@ -563,41 +608,47 @@ def _run_gate_command(argv: list[str]) -> int:
 def _build_gate_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow gate",
+        formatter_class=RedWidowHelpFormatter,
         description="Gate IDE extension trust changes for pre-commit, pre-push, and CI.",
     )
-    parser.add_argument("targets", nargs="*", help="VSIX files or unpacked extension directories to gate")
+    parser.add_argument("targets", nargs="*", metavar="TARGET", help="VSIX files or extension dirs")
     parser.add_argument(
         "--workspace",
         action="append",
         default=[],
-        help="workspace directory to gate; defaults to the current directory when no inputs are provided",
+        metavar="DIR",
+        help="workspace dir",
     )
     parser.add_argument(
         "--recommendations",
         action="append",
         default=[],
-        help="explicit VS Code extensions.json recommendations file to check; may be repeated",
+        metavar="FILE",
+        help="VS Code extensions.json file",
     )
     parser.add_argument("--installed", action="store_true", help="gate locally installed VS Code-compatible extensions")
     parser.add_argument(
         "--extension-root",
         action="append",
         default=[],
-        help="additional installed-extension root to search; may be repeated",
+        metavar="DIR",
+        help="extra installed-extension root",
     )
-    parser.add_argument("--policy", help="enforce a JSON policy file against scanned extensions and recommendations")
+    parser.add_argument("--policy", metavar="FILE", help="enforce policy JSON")
     parser.add_argument(
         "--lockfile",
-        help=f"validate scanned extensions and approve recommendations from a lockfile; defaults to {DEFAULT_LOCKFILE} when present",
+        metavar="FILE",
+        help=f"validate lockfile; defaults to {DEFAULT_LOCKFILE} when present",
     )
     parser.add_argument("--offline", action="store_true", help="do not resolve recommended extensions from marketplaces")
     parser.add_argument("--fail-on-review", action="store_true", help="exit with code 2 when the gate decision is REVIEW")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    parser.add_argument("--json", action="store_true", help="alias for --format json")
     parser.add_argument(
         "--format",
         choices=["text", "json", "markdown", "sarif"],
+        metavar="FORMAT",
         default="text",
-        help="output format for gate results",
+        help="text, json, markdown, or sarif",
     )
     return parser
 
@@ -667,42 +718,48 @@ def _run_approve_command(argv: list[str]) -> int:
 def _build_approve_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow approve",
+        formatter_class=RedWidowHelpFormatter,
         description="Approve the current workspace's resolved IDE extensions into a Red Widow lockfile.",
     )
-    parser.add_argument("targets", nargs="*", help="VSIX files or unpacked extension directories to approve")
+    parser.add_argument("targets", nargs="*", metavar="TARGET", help="VSIX files or extension dirs")
     parser.add_argument(
         "--workspace",
         action="append",
         default=[],
-        help="workspace directory to approve; defaults to the current directory when no inputs are provided",
+        metavar="DIR",
+        help="workspace dir",
     )
     parser.add_argument(
         "--recommendations",
         action="append",
         default=[],
-        help="explicit VS Code extensions.json recommendations file to approve; may be repeated",
+        metavar="FILE",
+        help="VS Code extensions.json file",
     )
     parser.add_argument("--installed", action="store_true", help="include locally installed VS Code-compatible extensions")
     parser.add_argument(
         "--extension-root",
         action="append",
         default=[],
-        help="additional installed-extension root to search; may be repeated",
+        metavar="DIR",
+        help="extra installed-extension root",
     )
-    parser.add_argument("--policy", help="apply a policy before writing approvals")
-    parser.add_argument("--reviewed-by", default="", help="reviewer name or email to record in the lockfile")
+    parser.add_argument("--policy", metavar="FILE", help="apply policy before approval")
+    parser.add_argument("--reviewed-by", metavar="NAME", default="", help="reviewer for lockfile")
     parser.add_argument(
         "--lockfile",
+        metavar="FILE",
         default=DEFAULT_LOCKFILE,
         help=f"lockfile to write; defaults to {DEFAULT_LOCKFILE}",
     )
     parser.add_argument("--offline", action="store_true", help="do not resolve recommended extensions from marketplaces")
-    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    parser.add_argument("--json", action="store_true", help="alias for --format json")
     parser.add_argument(
         "--format",
         choices=["text", "json"],
+        metavar="FORMAT",
         default="text",
-        help="output format for approval results",
+        help="text or json",
     )
     return parser
 
@@ -805,16 +862,19 @@ def _run_export_command(argv: list[str]) -> int:
 def _build_export_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow export",
+        formatter_class=RedWidowHelpFormatter,
         description="Export Red Widow approvals into enterprise policy formats.",
     )
     subparsers = parser.add_subparsers(dest="export_command", required=True)
 
     vscode = subparsers.add_parser(
         "vscode-allowed",
+        formatter_class=RedWidowHelpFormatter,
         help="export a VS Code extensions.allowed policy from a Red Widow lockfile",
     )
     vscode.add_argument(
         "--lockfile",
+        metavar="FILE",
         default=DEFAULT_LOCKFILE,
         help=f"lockfile to export; defaults to {DEFAULT_LOCKFILE}",
     )
@@ -831,10 +891,11 @@ def _build_export_command_parser() -> argparse.ArgumentParser:
     vscode.add_argument(
         "--format",
         choices=["json", "settings-json"],
+        metavar="FORMAT",
         default="json",
-        help="output the full Red Widow envelope or just the VS Code settings object",
+        help="json or settings-json",
     )
-    vscode.add_argument("--output", help="write output to a file instead of stdout")
+    vscode.add_argument("--output", metavar="FILE", help="write output to file")
     return parser
 
 
