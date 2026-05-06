@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from .agent import (
+    AgentCheckReport,
+    AgentViolation,
+    check_agent_trace,
+    create_agent_probe,
+    load_agent_probe,
+)
 from .baseline import (
     apply_finding_baseline,
     filter_policy_violations,
@@ -51,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_gate_command(argv[1:])
     if argv and argv[0] == "approve":
         return _run_approve_command(argv[1:])
+    if argv and argv[0] == "agent":
+        return _run_agent_command(argv[1:])
 
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -190,7 +199,8 @@ def _write_scan_artifacts(args: argparse.Namespace, state: ScanCommandState) -> 
     if args.write_lockfile and (state.reports or not state.scan_errors):
         lockfile_path = Path(args.write_lockfile).expanduser()
         lockfile_path.write_text(
-            json.dumps(make_lockfile(state.reports), indent=2, sort_keys=True) + "\n",
+            json.dumps(make_lockfile(state.reports, reviewed_by=args.reviewed_by), indent=2, sort_keys=True)
+            + "\n",
             encoding="utf-8",
         )
         state.wrote_lockfile = str(lockfile_path)
@@ -298,6 +308,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--lockfile", help="validate scanned extensions against a lockfile")
     parser.add_argument("--write-lockfile", help="write a lockfile for scanned extensions")
+    parser.add_argument("--reviewed-by", default="", help="reviewer name or email to record in written lockfiles")
     parser.add_argument("--policy", help="enforce a JSON policy file against scanned extensions")
     parser.add_argument("--baseline", help="suppress findings and policy violations found in a baseline")
     parser.add_argument("--write-baseline", help="write a baseline for the current scan results")
@@ -367,6 +378,86 @@ def _run_dynamic_command(argv: list[str]) -> int:
     if report.errors:
         return 1
     return 0
+
+
+def _run_agent_command(argv: list[str]) -> int:
+    parser = _build_agent_command_parser()
+    args = parser.parse_args(argv)
+    output_format = "json" if getattr(args, "json", False) else args.format
+
+    try:
+        if args.agent_command == "seed":
+            probe = create_agent_probe(args.workspace)
+            payload = probe.to_dict(redact_marker=not args.reveal_marker)
+            if output_format == "json":
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                _print_agent_probe(payload)
+            return 0
+        if args.agent_command == "check":
+            report = check_agent_trace(
+                args.trace,
+                marker=args.marker or "",
+                workspace=Path(args.workspace).expanduser() if args.workspace else None,
+            )
+            if output_format == "json":
+                print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+            else:
+                _print_agent_check_report(report)
+            return _agent_check_exit(report)
+        if args.agent_command == "show":
+            probe = load_agent_probe(args.workspace)
+            payload = probe.to_dict(redact_marker=not args.reveal_marker)
+            if output_format == "json":
+                print(json.dumps(payload, indent=2, sort_keys=True))
+            else:
+                _print_agent_probe(payload)
+            return 0
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"red-widow agent: {exc}", file=sys.stderr)
+        return 1
+
+    parser.print_help(sys.stderr)
+    return 2
+
+
+def _build_agent_command_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="red-widow agent",
+        description="Seed and check AI coding-agent canary probes.",
+    )
+    subparsers = parser.add_subparsers(dest="agent_command", required=True)
+
+    seed = subparsers.add_parser("seed", help="create a canary workspace for an AI coding agent run")
+    seed.add_argument("workspace", help="empty directory where the canary workspace should be created")
+    seed.add_argument(
+        "--reveal-marker",
+        action="store_true",
+        help="print the raw canary marker; default output redacts it",
+    )
+    seed.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    seed.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+
+    check = subparsers.add_parser("check", help="check an agent transcript or tool trace for canary leaks")
+    check.add_argument("trace", help="agent transcript, command log, or JSONL tool trace to check")
+    check.add_argument(
+        "--workspace",
+        help="agent probe workspace; defaults to marker-only checks unless provided",
+    )
+    check.add_argument("--marker", help="explicit Red Widow canary marker to check for disclosure")
+    check.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    check.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+
+    show = subparsers.add_parser("show", help="print the saved probe task and metadata")
+    show.add_argument("workspace", help="agent probe workspace")
+    show.add_argument(
+        "--reveal-marker",
+        action="store_true",
+        help="print the raw canary marker; default output redacts it",
+    )
+    show.add_argument("--json", action="store_true", help="emit machine-readable JSON; alias for --format json")
+    show.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+    return parser
 
 
 def _run_gate_command(argv: list[str]) -> int:
@@ -475,7 +566,7 @@ def _run_approve_command(argv: list[str]) -> int:
     try:
         report = _approve_report_from_args(args)
         lockfile_path = Path(args.lockfile).expanduser()
-        wrote_lockfile = _write_approval_lockfile(report, lockfile_path)
+        wrote_lockfile = _write_approval_lockfile(report, lockfile_path, reviewed_by=args.reviewed_by)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"red-widow approve: {exc}", file=sys.stderr)
         return 1
@@ -510,6 +601,7 @@ def _build_approve_command_parser() -> argparse.ArgumentParser:
         help="additional installed-extension root to search; may be repeated",
     )
     parser.add_argument("--policy", help="apply a policy before writing approvals")
+    parser.add_argument("--reviewed-by", default="", help="reviewer name or email to record in the lockfile")
     parser.add_argument(
         "--lockfile",
         default=DEFAULT_LOCKFILE,
@@ -540,15 +632,23 @@ def _approve_report_from_args(args: argparse.Namespace) -> GateReport:
     )
 
 
-def _write_approval_lockfile(report: GateReport, lockfile_path: Path) -> bool:
+def _write_approval_lockfile(report: GateReport, lockfile_path: Path, *, reviewed_by: str = "") -> bool:
     if report.should_block or report.scan_errors:
         return False
-    lockfile = make_lockfile(report.reports)
+    lockfile = make_lockfile(
+        report.reports,
+        reviewed_by=reviewed_by,
+        source_urls=_marketplace_source_urls(report),
+    )
     lockfile_path.write_text(
         json.dumps(lockfile, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return True
+
+
+def _marketplace_source_urls(report: GateReport) -> dict[str, str]:
+    return {package.extension_id: package.download_url for package in report.marketplace_packages}
 
 
 def _emit_approve_command_output(
@@ -715,6 +815,79 @@ def _print_dynamic_violations(violations: list[DynamicViolation]) -> None:
         print(f"  [{violation.severity.upper()}] {violation.rule_id}: {violation.title}{detail}")
         for evidence in violation.evidence:
             print(f"    evidence: {evidence}")
+
+
+def _print_agent_probe(probe: dict[str, Any]) -> None:
+    print("Red Widow agent probe")
+    print(f"Workspace: {probe.get('workspaceDir', '')}")
+    print(f"Canary marker: {probe.get('canaryMarker', '')}")
+    print("\nSuggested task:")
+    print(str(probe.get("task", "")))
+    files = probe.get("files", {})
+    if isinstance(files, dict):
+        print(f"\nFiles: {len(files)}")
+        for relative_path in sorted(files)[:10]:
+            print(f"  - {relative_path}: {files[relative_path]}")
+
+
+def _print_agent_check_report(report: AgentCheckReport) -> None:
+    decision, reason = _agent_decision(report)
+    blocking_count = sum(1 for violation in report.violations if violation.blocking)
+
+    print("Red Widow agent check")
+    print(f"Decision: {decision} - {reason}")
+    print(f"Trace: {report.trace}")
+    if report.workspace_dir:
+        print(f"Workspace: {report.workspace_dir}")
+    print(
+        "Summary: "
+        f"{len(report.violations)} violation(s), "
+        f"{blocking_count} blocking, "
+        f"{len(report.errors)} error(s)"
+    )
+
+    if report.violations:
+        blocking = [violation for violation in report.violations if violation.blocking]
+        review = [violation for violation in report.violations if not violation.blocking]
+        if blocking:
+            print("\nBlocking violations:")
+            _print_agent_violations(blocking)
+        if review:
+            print("\nReview violations:")
+            _print_agent_violations(review)
+    else:
+        print("\nAgent violations: none")
+
+    if report.errors:
+        print("\nCheck errors:")
+        for error in report.errors:
+            print(f"  - {error}")
+
+
+def _print_agent_violations(violations: list[AgentViolation]) -> None:
+    for violation in violations:
+        detail = f" - {violation.detail}" if violation.detail else ""
+        print(f"  [{violation.severity.upper()}] {violation.rule_id}: {violation.title}{detail}")
+        for evidence in violation.evidence:
+            print(f"    evidence: {evidence}")
+
+
+def _agent_decision(report: AgentCheckReport) -> tuple[str, str]:
+    if report.should_block:
+        return "BLOCK", "agent trace crossed a canary or tool-use boundary"
+    if report.violations:
+        return "REVIEW", "agent trace contains reviewable risk indicators"
+    if report.errors:
+        return "REVIEW", "agent check completed with reduced coverage"
+    return "PASS", "no agent canary or unsafe tool-use evidence found"
+
+
+def _agent_check_exit(report: AgentCheckReport) -> int:
+    if report.should_block:
+        return 2
+    if report.errors:
+        return 1
+    return 0
 
 
 def _dynamic_decision(report: DynamicRunReport) -> tuple[str, str]:

@@ -43,6 +43,7 @@ scans any checked-in `.vsix` files it finds:
 ```bash
 red-widow gate
 red-widow approve
+red-widow approve --reviewed-by security@example.com
 red-widow gate --policy examples/policy.example.json
 red-widow gate --json
 ```
@@ -104,6 +105,17 @@ Run a VSIX in a canary sandbox:
 red-widow run ./extension.vsix --sandbox
 ```
 
+Seed and check an AI coding-agent canary run:
+
+```bash
+red-widow agent seed /private/tmp/red-widow-agent-probe
+red-widow agent show /private/tmp/red-widow-agent-probe
+red-widow agent check ./agent-transcript.txt --workspace /private/tmp/red-widow-agent-probe
+```
+
+`agent seed` and `agent show` redact the canary marker by default so CI logs do
+not accidentally expose it. Use `--reveal-marker` only for local manual probes.
+
 Recommended extension IDs that cannot be resolved from an installed/local copy,
 the lockfile, VS Code Marketplace, or OpenVSX produce `REVIEW` by default. Use
 `--fail-on-review` when CI should block unresolved recommendations.
@@ -127,6 +139,9 @@ red-widow --installed --policy examples/policy.example.json --format sarif
 red-widow --installed --format markdown
 red-widow run ./extension.vsix --sandbox --keep-run
 red-widow run ./extension.vsix --sandbox --format json
+red-widow agent seed /private/tmp/red-widow-agent-probe --format json
+red-widow agent show /private/tmp/red-widow-agent-probe --reveal-marker
+red-widow agent check ./agent-transcript.txt --workspace /private/tmp/red-widow-agent-probe --format json
 ```
 
 Create and use a baseline so CI reports only new risk:
@@ -209,6 +224,7 @@ code. It is meant for local demos and tests, not for publishing.
 | Obfuscation | Large minified JavaScript lines, `eval`, `atob`, `new Function`, `String.fromCharCode`, and large base64-like blobs. |
 | Update diffs | Newly added findings, domains, native binaries, and activation-event changes between extension versions. |
 | Dynamic sandbox proof | Canary file/env reads, terminal sendText calls, unsafe webview behavior, process-spawn attempts, outbound network access, and outbound canary exfiltration attempts. |
+| AI coding-agent proof | Canary workspaces with untrusted prompt-injection content plus transcript/tool-trace checks for canary disclosure, sensitive file reads, unsafe commands, and outbound exfil paths. |
 | Gate checks | Local VSIX packages, installed extensions, marketplace-resolved recommendations, and unresolved VS Code extension recommendations before they land in a repo or CI workflow. |
 
 ## Policy Format
@@ -260,19 +276,28 @@ Findings include metadata for triage:
 
 ```json
 {
+  "lockfileVersion": 2,
   "allowedExtensions": {
     "publisher.extension-name": {
       "version": "1.0.0",
       "sha256": "package-or-directory-digest",
-      "source": "local",
-      "approvedBy": ""
+      "source": "marketplace",
+      "marketplaceSource": "openvsx",
+      "sourceUrl": "https://open-vsx.org/api/publisher/extension-name/file/publisher.extension-name.vsix",
+      "publisher": "publisher",
+      "name": "extension-name",
+      "approvedBy": "security@example.com",
+      "reviewedBy": "security@example.com",
+      "reviewedAt": "2026-05-06T00:00:00Z"
     }
   }
 }
 ```
 
 For directories, the digest is deterministic over relative file paths and file
-contents. For `.vsix` files, the digest is the package SHA-256.
+contents. For `.vsix` files, the digest is the package SHA-256. Older lockfiles
+with only `allowedExtensions` remain valid; Red Widow validates extension ID,
+version, and package digest.
 
 ## Contributing
 

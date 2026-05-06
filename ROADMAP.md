@@ -83,6 +83,7 @@ The current CLI already covers the first useful wedge, `redwidow-vsix`:
 | VSIX webview, terminal, env sweep, executable download chain, and workspace trust findings | Built |
 | Extension update diff | Built |
 | Extension lockfile | Built |
+| Lockfile v2 approval metadata | Built |
 | Local VSIX and extension recommendation gate | Built |
 | Marketplace/OpenVSX recommendation resolution | Built |
 | Approval lockfile flow for resolved IDE extensions | Built |
@@ -97,6 +98,7 @@ The current CLI already covers the first useful wedge, `redwidow-vsix`:
 | VS Code MCP, task/debug/settings workflow gate | Built |
 | VSIX language model tool detection | Built |
 | Workspace Trust metadata precision | Built |
+| AI coding-agent canary probe seed/check | Built |
 
 The next work should make these capabilities reliable to install, easy to run in
 CI, and precise enough that security teams can trust the signal.
@@ -128,7 +130,7 @@ Immediate backlog:
 1. Fix local packaging environment and add a wheel smoke test.
 2. Add `docs/ci.md` with GitHub Actions and SARIF examples.
 3. Add `--strict` mode that treats scan truncation, malformed manifests, and dynamic harness errors as blocking.
-4. Add lockfile v2 approval metadata such as reviewed-by, reviewed-at, source URL, and marketplace source.
+4. Add signed approval records for lockfile entries once the metadata format has settled.
 5. Add installable package smoke tests for the CLI entry point, gate command, approve command, marketplace cache, and fixture demo.
 
 ## Phase 2: Update Gate And CI Workflow
@@ -267,10 +269,13 @@ and approval workflow have clear demand.
 | MCP and agent runs with replayable traces | Measures progress toward developer-workflow exploit proof. |
 | CI and devcontainer boundary violations caught | Measures coverage beyond VSIX packages. |
 
-## Recommended Next Three Builds
+## Recommended Next Builds
 
 1. Package and release the CLI properly.
 2. Add a GitHub Action with SARIF, update-diff examples, and workflow-change
    gates.
-3. Build `redwidow-mcp`: inventory MCP configs, run a local MCP server in a
+3. Build `redwidow-agent`: move from transcript checking to monitored agent
+   runs with canary files, untrusted repo content, and replayable tool-call
+   traces.
+4. Build `redwidow-mcp`: inventory MCP configs, run a local MCP server in a
    canary sandbox, and report file/network/process boundary violations.

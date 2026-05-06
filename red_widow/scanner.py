@@ -7,13 +7,16 @@ import re
 import zipfile
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
 from .models import DiffReport, Finding, ScanReport
 
 
+LOCKFILE_VERSION = 2
+MARKETPLACE_SOURCES = {"openvsx", "vscode"}
 MAX_TEXT_BYTES = 1_500_000
 MAX_EVIDENCE_PER_RULE = 3
 MAX_PACKAGE_FILES = 100_000
@@ -292,16 +295,36 @@ def discover_installed_extensions(extra_roots: Iterable[str | Path] = ()) -> lis
     return sorted(extension_dirs)
 
 
-def make_lockfile(reports: Iterable[ScanReport]) -> dict[str, Any]:
+def make_lockfile(
+    reports: Iterable[ScanReport],
+    *,
+    reviewed_by: str = "",
+    reviewed_at: str | None = None,
+    source_urls: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     allowed: dict[str, dict[str, str]] = {}
+    timestamp = reviewed_at if reviewed_at is not None else _utc_timestamp()
+    urls = {extension_id.lower(): url for extension_id, url in (source_urls or {}).items() if url}
     for report in reports:
-        allowed[report.extension_id] = {
+        install_source = report.install_source or "local"
+        marketplace_source = install_source if install_source in MARKETPLACE_SOURCES else ""
+        entry = {
             "version": report.version,
             "sha256": report.package_sha256,
-            "source": "local",
-            "approvedBy": "",
+            "source": "marketplace" if marketplace_source else _lockfile_local_source(install_source),
+            "publisher": report.publisher,
+            "name": report.name,
+            "approvedBy": reviewed_by,
+            "reviewedBy": reviewed_by,
+            "reviewedAt": timestamp,
         }
-    return {"allowedExtensions": allowed}
+        if marketplace_source:
+            entry["marketplaceSource"] = marketplace_source
+        source_url = urls.get(report.extension_id.lower())
+        if source_url:
+            entry["sourceUrl"] = source_url
+        allowed[report.extension_id] = entry
+    return {"lockfileVersion": LOCKFILE_VERSION, "allowedExtensions": allowed}
 
 
 def validate_lockfile(reports: Iterable[ScanReport], lockfile: dict[str, Any]) -> list[str]:
@@ -325,6 +348,16 @@ def validate_lockfile(reports: Iterable[ScanReport], lockfile: dict[str, Any]) -
         if expected_sha and expected_sha != report.package_sha256:
             errors.append(f"{report.extension_id}: package digest does not match lockfile")
     return errors
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _lockfile_local_source(install_source: str) -> str:
+    if install_source in {"installed", "directory"}:
+        return install_source
+    return "local"
 
 
 def _read_package(path: Path) -> tuple[list[PackageFile], str]:
