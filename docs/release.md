@@ -41,10 +41,11 @@ environment if you want a human checkpoint before upload.
    git status --short --branch
    ```
 
-2. Update both versions to the same value:
+2. Update release versions to the same value:
 
    - `pyproject.toml`: `[project].version`
    - `red_widow/__init__.py`: `__version__`
+   - `vscode-extension/package.json`: `version`
 
 3. Run local validation.
 
@@ -64,24 +65,24 @@ environment if you want a human checkpoint before upload.
 5. Commit the version bump.
 
    ```bash
-   git add pyproject.toml red_widow/__init__.py
-   git commit -m "chore: release v0.1.0"
+   git add pyproject.toml red_widow/__init__.py vscode-extension/package.json
+   git commit -m "chore: release vX.Y.Z"
    ```
 
 6. Tag and push.
 
    ```bash
-   git tag -a v0.1.0 -m "v0.1.0"
+   git tag -a vX.Y.Z -m "vX.Y.Z"
    git push origin main
-   git push origin v0.1.0
+   git push origin vX.Y.Z
    ```
 
 7. Create a GitHub Release for the tag.
 
    ```bash
-   gh release create v0.1.0 \
-     --title "v0.1.0" \
-     --notes "Initial Red Widow release."
+   gh release create vX.Y.Z \
+     --title "vX.Y.Z" \
+     --notes "Release notes for vX.Y.Z."
    ```
 
 8. The `Release` workflow runs tests, builds the sdist and wheel, and publishes
