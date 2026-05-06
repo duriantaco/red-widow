@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "VSIX, IDE extension, and AI developer workflow security scanner."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Red Widow contributors" }]
 keywords = [
   "ai-security",
@@ -23,7 +23,6 @@ classifiers = [
   "Environment :: Console",
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
-  "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.10",
@@ -37,6 +36,11 @@ classifiers = [
 
 [project.scripts]
 red-widow = "red_widow.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/duriantaco/red-widow"
+Repository = "https://github.com/duriantaco/red-widow"
+Issues = "https://github.com/duriantaco/red-widow/issues"
 
 [tool.setuptools.packages.find]
 include = ["red_widow*"]
