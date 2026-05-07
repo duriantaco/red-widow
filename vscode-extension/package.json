@@ -5,6 +5,15 @@
   "version": "0.1.1",
   "publisher": "red-widow",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/duriantaco/red-widow.git",
+    "directory": "vscode-extension"
+  },
+  "homepage": "https://github.com/duriantaco/red-widow#readme",
+  "bugs": {
+    "url": "https://github.com/duriantaco/red-widow/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
