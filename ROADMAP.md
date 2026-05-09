@@ -99,6 +99,10 @@ The current CLI already covers the first useful wedge, `redwidow-vsix`:
 | VSIX language model tool detection | Built |
 | Workspace Trust metadata precision | Built |
 | AI coding-agent canary probe seed/check | Built |
+| First-party gate action and PR CI workflow | Built |
+| Update-diff action examples | Pending |
+| Strict CI mode for scan errors and truncation warnings | Built |
+| Dynamic `run --strict` harness blocking | Built |
 
 The next work should make these capabilities reliable to install, easy to run in
 CI, and precise enough that security teams can trust the signal.
@@ -127,11 +131,11 @@ security tool.
 
 Immediate backlog:
 
-1. Fix local packaging environment and add a wheel smoke test.
-2. Add `docs/ci.md` with GitHub Actions and SARIF examples.
-3. Add `--strict` mode that treats scan truncation, malformed manifests, and dynamic harness errors as blocking.
+1. Expand packaging smoke coverage across published install paths.
+2. Add update-diff and changed-workflow examples to `docs/ci.md`.
+3. Keep `--strict` mode wired through new CI, action, and editor workflows.
 4. Add signed approval records for lockfile entries once the metadata format has settled.
-5. Add installable package smoke tests for the CLI entry point, gate command, approve command, marketplace cache, and fixture demo.
+5. Expand installable package smoke tests to cover marketplace cache and fixture demo paths.
 
 ## Phase 2: Update Gate And CI Workflow
 
@@ -140,7 +144,7 @@ developers or CI runners.
 
 | Workstream | Deliverable | Release Criteria |
 | --- | --- | --- |
-| GitHub Action | First-party action wrapping scan, diff, lockfile, policy, and SARIF. | A repo can block risky extension updates in CI with one workflow file. |
+| GitHub Action | First-party gate/inventory action with policy, lockfile, and SARIF; update-diff examples still pending. | A repo can block risky extension and AI-IDE workflow changes in CI with one workflow file. |
 | Lockfile v2 | Include source marketplace, publisher, version, hash, approval metadata, and last-reviewed timestamp. | Teams can approve exact extension versions and detect drift. |
 | Diff reports | More explicit "new risk in this update" output. | The diff view answers why an update should be blocked. |
 | PR annotations | Markdown and SARIF summaries for changed findings. | Reviewers see actionable findings in GitHub. |

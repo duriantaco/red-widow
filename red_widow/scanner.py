@@ -481,7 +481,19 @@ def _build_report(
         activation_events=tuple(str(event) for event in activation_events),
         file_count=len(files),
         total_size=sum(file.size for file in files),
+        scan_warnings=_scan_warnings(files),
     )
+
+
+def _scan_warnings(files: list[PackageFile]) -> list[str]:
+    warnings = [
+        f"{file.path}: sampled {len(file.sample)} of {file.size} bytes"
+        for file in files
+        if file.size > len(file.sample)
+    ]
+    if len(warnings) > 10:
+        return [*warnings[:10], f"{len(warnings) - 10} more file(s) were truncated during sampling"]
+    return warnings
 
 
 def _scan_manifest(manifest_path: str, manifest: dict[str, Any]) -> list[Finding]:

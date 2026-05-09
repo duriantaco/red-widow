@@ -1,7 +1,9 @@
 # Red Widow VS Code Extension
 
 This extension runs the local `red-widow` CLI against the current workspace and
-surfaces the gate decision inside VS Code.
+surfaces the gate decision, next action, and inspected/skipped surfaces inside
+VS Code. The CLI must be on `PATH`, or configured with `redWidow.cliPath` and
+`redWidow.cliArgs`.
 
 ## Features
 

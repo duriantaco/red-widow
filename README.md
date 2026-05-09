@@ -17,23 +17,22 @@
   <a href="#contributing"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-orange"></a>
 </p>
 
-`red-widow` is an open-source security scanner for VS Code-compatible IDE
-extensions, VSIX packages, and developer workflow attack surfaces. It can inspect
-`.vsix` packages, unpacked extension directories, locally installed extensions,
-extension update diffs, lockfiles, policy files, inventory reports, and SARIF
-output for CI.
+Red Widow answers one question: can this developer workflow change reach
+secrets, commands, or trusted tools before it reaches developers or CI?
 
-Use Red Widow to find risky IDE extension behavior before it reaches developer
-machines: bundled secrets, broad activation events, native binaries,
-`child_process` usage, VS Code webview and terminal API abuse, environment
-variable sweeping, executable download chains, sensitive local path access,
-suspicious network domains, and dynamic canary exfiltration attempts.
+The main path is simple: gate repo workflow risk, approve exact extension
+packages, and enforce the same decision in CI. Red Widow inspects
+VS Code-compatible extension recommendations, checked-in VSIX packages,
+MCP/tasks/debug/settings/rules/hooks for VS Code, Cursor, and Windsurf,
+lockfiles, policy files, and SARIF output for CI. Lower-level scan, diff,
+dynamic sandbox, and agent canary commands are available when you need deeper
+proof.
 
 The static scanner is intentionally dependency-free at runtime. Dynamic sandbox
 runs require Node.js because Red Widow executes extension activation code through
 an instrumented Node harness.
 
-## Usage
+## Start Here: Gate A Repo Before Extension Or AI-IDE Changes Land
 
 For day-to-day repo checks, use the gate. It scans the current workspace's
 `.vscode/extensions.json`, resolves recommended extensions from the VS Code
@@ -47,6 +46,9 @@ red-widow approve --reviewed-by security@example.com
 red-widow gate --policy examples/policy.example.json
 red-widow gate --json
 ```
+
+The gate prints `PASS`, `REVIEW`, or `BLOCK`, followed by the next action and
+the surfaces it inspected or skipped.
 
 The same gate also auto-detects VS Code-compatible AI-IDE workflow config in the
 workspace, including `.vscode/mcp.json`, VS Code tasks/debug/settings,
@@ -70,9 +72,16 @@ Use the first-party GitHub Action in CI:
     workspace: .
     policy: examples/policy.example.json
     offline: "true"
+    strict: "true"
     fail-on-review: "true"
     upload-sarif: "true"
 ```
+
+Offline CI does not download marketplace packages. It gates repo config,
+checked-in non-ignored VSIX packages, lockfile drift, and unresolved
+recommendations. With `fail-on-review: "true"`, unresolved recommendations
+block the run; set `offline: "false"` when CI is allowed to download and inspect
+recommended marketplace packages.
 
 Stay local-only when you do not want network access:
 
@@ -121,7 +130,9 @@ red-widow export vscode-allowed --lockfile red-widow.lock.json --format settings
 Run Red Widow inside VS Code with the editor extension in
 [`vscode-extension/`](vscode-extension/). The extension runs the local CLI,
 shows the gate decision in the status bar, and adds Problems diagnostics for
-blocking and review findings. See [`docs/vscode-extension.md`](docs/vscode-extension.md).
+blocking and review findings. It runs the gate offline by default unless
+`redWidow.offline` is disabled. See
+[`docs/vscode-extension.md`](docs/vscode-extension.md).
 
 Run a VSIX in a canary sandbox:
 
@@ -157,6 +168,7 @@ red-widow inventory --format markdown
 red-widow export vscode-allowed --format json
 red-widow gate --workspace .
 red-widow gate --offline
+red-widow gate --strict --offline
 red-widow gate --installed --policy examples/policy.example.json
 red-widow gate --installed --extension-root ./extensions
 red-widow gate --recommendations .vscode/extensions.json
@@ -201,6 +213,13 @@ CI worker, container, or virtual machine.
 For explicit target lists, use `--continue-on-error` to keep scanning after a
 malformed package. Installed-extension scans continue by default and return
 status 1 if any target could not be parsed.
+
+Use `gate --strict` in CI when malformed packages or scan truncation warnings
+should block as incomplete static coverage. Use `run --strict` when dynamic
+harness errors should block canary sandbox runs. The first-party GitHub Action
+currently runs gate and inventory; it does not run the dynamic sandbox.
+Workspace gate discovery respects the workspace `.gitignore`; pass an ignored
+VSIX explicitly when you want to scan it anyway.
 
 Exit codes are stable for CI:
 

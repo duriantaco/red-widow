@@ -1,14 +1,21 @@
 # Red Widow VS Code Extension
 
 The VS Code extension is a thin UI over the existing Red Widow CLI. It keeps the
-security logic in Python and uses the editor only for workflow integration.
+security logic in Python and uses the editor only for workflow integration. Its
+first screen is the same gate decision as CI: `PASS`, `REVIEW`, or `BLOCK`,
+plus the next action and the inspected/skipped surfaces.
+
+The extension requires the `red-widow` CLI on `PATH`, or a configured
+`redWidow.cliPath`/`redWidow.cliArgs` pair.
 
 ## What It Does
 
-- Runs `red-widow gate --workspace <folder> --format json`.
+- Runs `red-widow gate --workspace <folder> --format json --offline` by
+  default.
 - Shows the gate decision in the status bar.
 - Adds Problems diagnostics for blocking and review findings.
 - Watches VS Code, Cursor, Windsurf, MCP, agent-rule, and checked-in VSIX files.
+- Supports strict mode through the `redWidow.strict` setting.
 - Provides commands:
   - `Red Widow: Run Gate`
   - `Red Widow: Open Last Report`

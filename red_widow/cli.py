@@ -29,6 +29,21 @@ from .inventory import (
     inventory_report_text,
     make_inventory_report,
 )
+from .messages import (
+    AGENT_CHECK_INTENT,
+    AGENT_PROBE_INTENT,
+    APPROVE_INTENT,
+    DIFF_INTENT,
+    DYNAMIC_INTENT,
+    GATE_INTENT,
+    PRODUCT_INTENT,
+    SCAN_INTENT,
+    agent_check_next_action,
+    diff_next_action,
+    dynamic_next_action,
+    gate_next_action,
+    scan_next_action,
+)
 from .models import DiffReport, Finding, PolicyViolation, SCHEMA_VERSION, ScanReport, SEVERITY_ORDER
 from .output import gate_markdown, gate_sarif_report, inventory_markdown, inventory_text, sarif_report
 from .policy import evaluate_policy, load_policy
@@ -101,7 +116,7 @@ def _run_scan_command(parser: argparse.ArgumentParser, args: argparse.Namespace)
         targets=targets,
         installed_targets=installed_targets,
         custom_roots=custom_roots,
-        continue_on_error=args.continue_on_error or args.installed,
+        continue_on_error=args.continue_on_error or args.installed or args.strict,
     )
     state = _build_scan_state(args, reports, scan_errors)
     _emit_scan_command_output(args, output_format, state)
@@ -123,6 +138,7 @@ def _validate_scan_args(
         or args.policy
         or args.baseline
         or args.write_baseline
+        or args.strict
     ):
         parser.error("--diff cannot be combined with targets, --installed, policy, or lockfile options")
     if args.diff and output_format not in {"text", "json"}:
@@ -271,7 +287,7 @@ def _emit_scan_text_output(args: argparse.Namespace, state: ScanCommandState) ->
     for index, report in enumerate(state.reports):
         if index:
             print()
-        _print_report(report, args.max_findings)
+        _print_report(report, args.max_findings, strict=args.strict)
     if state.wrote_lockfile:
         print(f"\nWrote lockfile: {state.wrote_lockfile}")
     if state.wrote_baseline:
@@ -295,6 +311,8 @@ def _emit_scan_text_output(args: argparse.Namespace, state: ScanCommandState) ->
 def _scan_command_exit(args: argparse.Namespace, state: ScanCommandState) -> int:
     if state.lock_errors or state.policy_violations:
         return 2
+    if args.strict and (state.scan_errors or _reports_have_scan_warnings(state.reports)):
+        return 2
     if state.scan_errors:
         return 1
     return _exit_for_reports(state.reports, args.fail_on)
@@ -304,7 +322,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="red-widow",
         formatter_class=RedWidowHelpFormatter,
-        description="""Red Widow scans IDE extensions and AI developer workflow risk.
+        description=f"""Red Widow scans IDE extensions and AI developer workflow risk.
+
+{PRODUCT_INTENT}
 
 Common commands:
   red-widow gate           Gate current repo before merge or CI
@@ -350,6 +370,11 @@ Examples:
         help="continue after malformed targets",
     )
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat malformed targets and scan truncation warnings as blocking",
+    )
+    parser.add_argument(
         "--fail-on",
         metavar="LEVEL",
         choices=["low", "medium", "high", "critical"],
@@ -381,6 +406,11 @@ def _run_dynamic_command(argv: list[str]) -> int:
     )
     parser.add_argument("--timeout", metavar="SEC", type=int, default=10, help="harness timeout")
     parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat dynamic harness errors as blocking",
+    )
+    parser.add_argument(
         "--keep-run",
         action="store_true",
         help="preserve the run directory under .red-widow/runs for replay inspection",
@@ -402,6 +432,9 @@ def _run_dynamic_command(argv: list[str]) -> int:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"red-widow run: {exc}", file=sys.stderr)
         return 1
+
+    if args.strict:
+        _apply_strict_dynamic_report(report)
 
     if args.format == "json":
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
@@ -642,6 +675,11 @@ def _build_gate_command_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--offline", action="store_true", help="do not resolve recommended extensions from marketplaces")
     parser.add_argument("--fail-on-review", action="store_true", help="exit with code 2 when the gate decision is REVIEW")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="treat scan errors and scan truncation warnings as blocking gate items",
+    )
     parser.add_argument("--json", action="store_true", help="alias for --format json")
     parser.add_argument(
         "--format",
@@ -655,7 +693,7 @@ def _build_gate_command_parser() -> argparse.ArgumentParser:
 
 def _gate_report_from_args(args: argparse.Namespace) -> GateReport:
     policy = load_policy(args.policy) if args.policy else {}
-    return run_gate(
+    report = run_gate(
         targets=args.targets,
         workspaces=args.workspace,
         recommendation_paths=args.recommendations,
@@ -665,6 +703,9 @@ def _gate_report_from_args(args: argparse.Namespace) -> GateReport:
         lockfile=_load_gate_lockfile(_defaulted_lockfile_path(args.lockfile)),
         offline=args.offline,
     )
+    if args.strict:
+        _apply_strict_gate_report(report)
+    return report
 
 
 def _load_gate_lockfile(lockfile_path: Path | None) -> dict[str, Any]:
@@ -696,6 +737,71 @@ def _gate_command_exit(report: GateReport, *, fail_on_review: bool) -> int:
     if fail_on_review and report.has_review:
         return 2
     return 0
+
+
+def _reports_have_scan_warnings(reports: list[ScanReport]) -> bool:
+    return any(report.scan_warnings for report in reports)
+
+
+def _apply_strict_gate_report(report: GateReport) -> None:
+    for error in report.scan_errors:
+        report.blocking_items.append(
+            GateItem(
+                rule_id="strict-scan-error",
+                message="scan error is blocking in strict mode",
+                severity="high",
+                target=error.get("target", ""),
+                detail=error.get("error", ""),
+                blocking=True,
+            )
+        )
+    for scan_report in report.reports:
+        for warning in scan_report.scan_warnings:
+            report.blocking_items.append(
+                GateItem(
+                    rule_id="strict-scan-warning",
+                    message=f"{scan_report.extension_id}: scan warning is blocking in strict mode",
+                    severity="medium",
+                    extension_id=scan_report.extension_id,
+                    target=scan_report.target,
+                    detail=warning,
+                    blocking=True,
+                )
+            )
+
+
+def _apply_strict_dynamic_report(report: DynamicRunReport) -> None:
+    if not report.errors:
+        return
+    updated: list[DynamicViolation] = []
+    saw_harness_error = False
+    for violation in report.violations:
+        if violation.rule_id == "harness-error":
+            saw_harness_error = True
+            updated.append(
+                DynamicViolation(
+                    rule_id=violation.rule_id,
+                    title=violation.title,
+                    severity=violation.severity,
+                    detail=violation.detail,
+                    evidence=violation.evidence,
+                    blocking=True,
+                )
+            )
+        else:
+            updated.append(violation)
+    if not saw_harness_error:
+        updated.append(
+            DynamicViolation(
+                rule_id="harness-error",
+                title="Dynamic harness reported an execution error",
+                severity="low",
+                detail="extension execution did not complete cleanly in the sandbox harness",
+                evidence=tuple(report.errors),
+                blocking=True,
+            )
+        )
+    report.violations = updated
 
 
 def _run_approve_command(argv: list[str]) -> int:
@@ -814,11 +920,14 @@ def _emit_approve_command_output(
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print("Red Widow approve")
+        print(APPROVE_INTENT)
         print(f"Gate decision: {report.decision}")
         if wrote_lockfile:
+            print("Next: commit the lockfile and use red-widow gate in CI to detect drift.")
             print(f"Wrote lockfile: {lockfile_path}")
             print(f"Approved extensions: {len(report.reports)}")
         else:
+            print("Next: resolve blocking or scan-error items, then rerun approve.")
             print("Wrote lockfile: no")
         if report.has_review:
             print("Review items remain; lockfile only approves resolved scanned packages.")
@@ -911,7 +1020,13 @@ def _defaulted_lockfile_path(path: str | None) -> Path | None:
 def _print_gate_report(report: GateReport) -> None:
     summary = report.summary
     print("Red Widow gate")
+    print(GATE_INTENT)
     print(f"Decision: {report.decision} - {report.reason}")
+    print(f"Next: {gate_next_action(report)}")
+    if report.inspected:
+        print(f"Inspected: {'; '.join(report.inspected)}")
+    if report.skipped:
+        print(f"Skipped: {'; '.join(report.skipped)}")
     print(
         "Summary: "
         f"{summary['scannedPackages']} scanned package(s), "
@@ -987,7 +1102,9 @@ def _print_dynamic_report(report: DynamicRunReport, *, keep_run: bool = False) -
     blocking_count = sum(1 for violation in report.violations if violation.blocking)
 
     print("Red Widow dynamic sandbox")
+    print(DYNAMIC_INTENT)
     print(f"Decision: {decision} - {reason}")
+    print(f"Next: {dynamic_next_action(report)}")
     print(f"Extension: {extension_label}")
     print(f"Target: {report.target}")
     if keep_run:
@@ -1032,6 +1149,8 @@ def _print_dynamic_violations(violations: list[DynamicViolation]) -> None:
 
 def _print_agent_probe(probe: dict[str, Any]) -> None:
     print("Red Widow agent probe")
+    print(AGENT_PROBE_INTENT)
+    print("Next: give the suggested task to the agent, then run red-widow agent check on the trace.")
     print(f"Workspace: {probe.get('workspaceDir', '')}")
     print(f"Canary marker: {probe.get('canaryMarker', '')}")
     print("\nSuggested task:")
@@ -1048,7 +1167,9 @@ def _print_agent_check_report(report: AgentCheckReport) -> None:
     blocking_count = sum(1 for violation in report.violations if violation.blocking)
 
     print("Red Widow agent check")
+    print(AGENT_CHECK_INTENT)
     print(f"Decision: {decision} - {reason}")
+    print(f"Next: {agent_check_next_action(report)}")
     print(f"Trace: {report.trace}")
     if report.workspace_dir:
         print(f"Workspace: {report.workspace_dir}")
@@ -1104,6 +1225,8 @@ def _agent_check_exit(report: AgentCheckReport) -> int:
 
 
 def _dynamic_decision(report: DynamicRunReport) -> tuple[str, str]:
+    if _has_blocking_dynamic_harness_error(report):
+        return "BLOCK", "dynamic harness error is blocking in strict mode"
     if report.should_block:
         return "BLOCK", "blocking runtime violation observed"
     if report.violations:
@@ -1113,17 +1236,28 @@ def _dynamic_decision(report: DynamicRunReport) -> tuple[str, str]:
     return "PASS", "no dynamic violations observed"
 
 
-def _print_report(report: ScanReport, max_findings: int) -> None:
+def _has_blocking_dynamic_harness_error(report: DynamicRunReport) -> bool:
+    if not report.errors:
+        return False
+    return any(
+        violation.rule_id == "harness-error" and violation.blocking
+        for violation in report.violations
+    )
+
+
+def _print_report(report: ScanReport, max_findings: int, *, strict: bool = False) -> None:
     extension_label = report.extension_id
     if report.version:
         extension_label += f" {report.version}"
-    decision, reason = _scan_decision(report)
+    decision, reason = _scan_decision(report, strict=strict)
     severity_counts = _severity_counts(report.findings)
     blocking_findings = [finding for finding in report.findings if finding.blocking]
     review_findings = [finding for finding in report.findings if not finding.blocking]
 
     print("Red Widow scan")
+    print(SCAN_INTENT)
     print(f"Decision: {decision} - {reason}")
+    print(f"Next: {scan_next_action(report, decision)}")
     print(f"Extension: {extension_label}")
     print(f"Target: {report.target}")
     if report.editor or report.install_source:
@@ -1140,6 +1274,12 @@ def _print_report(report: ScanReport, max_findings: int) -> None:
         f"({_format_severity_counts(severity_counts)})"
     )
     print(f"Package: {report.file_count} file(s), {_format_bytes(report.total_size)}, sha256 {report.package_sha256}")
+    if report.scan_warnings:
+        print(f"Scan warnings: {len(report.scan_warnings)}")
+        for warning in report.scan_warnings[:5]:
+            print(f"  - {warning}")
+        if len(report.scan_warnings) > 5:
+            print(f"  ... {len(report.scan_warnings) - 5} more warning(s)")
     if report.activation_events:
         print(f"Activation: {', '.join(report.activation_events)}")
     if report.domains or report.native_binaries:
@@ -1190,7 +1330,9 @@ def _print_findings(findings: list[Finding], limit: int) -> int:
     return printed
 
 
-def _scan_decision(report: ScanReport) -> tuple[str, str]:
+def _scan_decision(report: ScanReport, *, strict: bool = False) -> tuple[str, str]:
+    if strict and report.scan_warnings:
+        return "BLOCK", "scan warnings are blocking in strict mode"
     if any(finding.blocking for finding in report.findings):
         return "BLOCK", "blocking findings require review before approval"
     if report.findings:
@@ -1221,7 +1363,9 @@ def _print_diff(diff: DiffReport, max_findings: int) -> None:
     review_findings = [finding for finding in diff.added_findings if not finding.blocking]
 
     print("Red Widow update diff")
+    print(DIFF_INTENT)
     print(f"Decision: {decision} - {reason}")
+    print(f"Next: {diff_next_action(decision)}")
     print(
         "Extension: "
         f"{diff.new.extension_id} {diff.old.version or '<unknown>'} -> {diff.new.version or '<unknown>'}"

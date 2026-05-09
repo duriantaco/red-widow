@@ -8,6 +8,14 @@ output_dir="${RED_WIDOW_OUTPUT_DIR:-red-widow-results}"
 offline="${RED_WIDOW_OFFLINE:-true}"
 installed="${RED_WIDOW_INSTALLED:-false}"
 fail_on_review="${RED_WIDOW_FAIL_ON_REVIEW:-false}"
+strict="${RED_WIDOW_STRICT:-false}"
+python_cmd="${PYTHON:-python}"
+
+if ! command -v "$python_cmd" >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
+    python_cmd="python3"
+  fi
+fi
 
 mkdir -p "$output_dir"
 
@@ -28,6 +36,9 @@ build_gate_args() {
   fi
   if [[ "$fail_on_review" == "true" ]]; then
     gate_args+=(--fail-on-review)
+  fi
+  if [[ "$strict" == "true" ]]; then
+    gate_args+=(--strict)
   fi
 }
 
@@ -66,7 +77,7 @@ red-widow "${inventory_args[@]}" > "$output_dir/inventory.json" || true
 build_inventory_args markdown
 red-widow "${inventory_args[@]}" > "$output_dir/inventory.md" || true
 
-decision="$(python - "$output_dir/gate.json" <<'PY'
+decision="$("$python_cmd" - "$output_dir/gate.json" <<'PY'
 import json
 import sys
 

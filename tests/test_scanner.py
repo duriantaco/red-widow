@@ -765,13 +765,29 @@ panel.webview.onDidReceiveMessage(() => {});
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Red Widow scan", result.stdout)
+        self.assertIn("Intent: inspect one VSIX", result.stdout)
         self.assertIn("Decision: BLOCK", result.stdout)
+        self.assertIn("Next: Fix or approve blocking findings", result.stdout)
         self.assertIn("Findings:", result.stdout)
         self.assertIn("Package:", result.stdout)
         self.assertIn("Indicators:", result.stdout)
         self.assertIn("Blocking findings:", result.stdout)
         self.assertIn("[CRITICAL] github-token", result.stdout)
         self.assertIn("[HIGH] child-process-use", result.stdout)
+
+    def test_cli_help_surfaces_product_intent(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "red_widow", "--help"],
+            cwd=Path(__file__).parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Red Widow scans", result.stdout)
+        self.assertIn("can this developer workflow change reach", result.stdout)
+        self.assertIn("secrets, commands, or trusted tools", result.stdout)
 
     def test_cli_text_output_surfaces_new_vsix_rule_names(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -795,15 +811,21 @@ panel.webview.onDidReceiveMessage(() => {});
         self.assertIn("executable-download-chain", result.stdout)
 
     def test_gate_without_inputs_passes_when_workspace_has_no_recommendations(self) -> None:
-        stdout = StringIO()
-        stderr = StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            returncode = cli.main(["gate", "--workspace", tempfile.gettempdir()])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stdout = StringIO()
+            stderr = StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                returncode = cli.main(["gate", "--workspace", temp_dir])
 
         self.assertEqual(returncode, 0)
         self.assertEqual(stderr.getvalue(), "")
         self.assertIn("Red Widow gate", stdout.getvalue())
+        self.assertIn("Intent: gate IDE extension", stdout.getvalue())
         self.assertIn("Decision: PASS", stdout.getvalue())
+        self.assertIn("Next: No action required", stdout.getvalue())
+        self.assertIn("Inspected:", stdout.getvalue())
+        self.assertIn("Skipped:", stdout.getvalue())
+        self.assertNotIn("marketplace package downloads", stdout.getvalue())
 
     def test_gate_default_scans_workspace_recommendations_and_vsix_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -838,6 +860,171 @@ panel.webview.onDidReceiveMessage(() => {});
         self.assertIn("marketplace-resolution-failed", {item["ruleId"] for item in payload["reviewItems"]})
         self.assertIn("webview-missing-csp", {finding["ruleId"] for finding in payload["reports"][0]["findings"]})
 
+    def test_gate_skips_gitignored_workspace_vsix_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            (workspace / ".gitignore").write_text("*.vsix\n", encoding="utf-8")
+            build_faulty_vsix(workspace / "ignored.vsix")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--offline",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["decision"], "PASS")
+        self.assertEqual(payload["summary"]["scannedPackages"], 0)
+
+    def test_gate_scans_gitignore_negated_workspace_vsix_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            (workspace / ".gitignore").write_text("*.vsix\n!kept.vsix\n", encoding="utf-8")
+            build_faulty_vsix(workspace / "ignored.vsix")
+            build_faulty_vsix(workspace / "kept.vsix")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--offline",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["decision"], "BLOCK")
+        self.assertEqual(payload["summary"]["scannedPackages"], 1)
+        self.assertEqual(Path(payload["reports"][0]["target"]).name, "kept.vsix")
+
+    def test_gate_gitignore_fallback_handles_anchored_directory_and_slash_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            (workspace / ".gitignore").write_text(
+                "/root-only.vsix\n"
+                "dist/\n"
+                "release/*.vsix\n",
+                encoding="utf-8",
+            )
+            build_faulty_vsix(workspace / "root-only.vsix")
+            build_faulty_vsix(workspace / "sub" / "root-only.vsix")
+            build_faulty_vsix(workspace / "dist" / "ignored.vsix")
+            build_faulty_vsix(workspace / "release" / "ignored.vsix")
+            build_faulty_vsix(workspace / "release" / "nested" / "kept.vsix")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--offline",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        scanned_names = sorted(Path(report["target"]).as_posix() for report in payload["reports"])
+        self.assertEqual(len(scanned_names), 2)
+        self.assertTrue(any(name.endswith("sub/root-only.vsix") for name in scanned_names))
+        self.assertTrue(any(name.endswith("release/nested/kept.vsix") for name in scanned_names))
+
+    def test_gate_gitignore_fallback_handles_nested_ignore_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            nested = workspace / "nested"
+            nested.mkdir()
+            (nested / ".gitignore").write_text("*.vsix\n!kept.vsix\n", encoding="utf-8")
+            build_faulty_vsix(nested / "ignored.vsix")
+            build_faulty_vsix(nested / "kept.vsix")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--offline",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["summary"]["scannedPackages"], 1)
+        self.assertTrue(payload["reports"][0]["target"].endswith("nested/kept.vsix"))
+
+    def test_gate_uses_git_check_ignore_when_workspace_is_git_repo(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is required for git check-ignore coverage")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            subprocess.run(["git", "init"], cwd=workspace, capture_output=True, text=True, check=True)
+            (workspace / ".gitignore").write_text("*.vsix\n!kept.vsix\n", encoding="utf-8")
+            build_faulty_vsix(workspace / "ignored.vsix")
+            build_faulty_vsix(workspace / "kept.vsix")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    "--workspace",
+                    str(workspace),
+                    "--offline",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["summary"]["scannedPackages"], 1)
+        self.assertEqual(Path(payload["reports"][0]["target"]).name, "kept.vsix")
+
     def test_gate_faulty_vsix_blocks_with_json_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             vsix = build_faulty_vsix(Path(temp_dir) / "faulty.vsix")
@@ -858,6 +1045,185 @@ panel.webview.onDidReceiveMessage(() => {});
         self.assertGreater(payload["summary"]["blockingItems"], 0)
         self.assertIn("reports", payload)
         self.assertIn("recommendations", payload)
+
+    def test_strict_scan_blocks_scan_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vsix = Path(temp_dir) / "large-source.vsix"
+            source = ("const value = 'red-widow';\n" * 70_000)
+            _write_vsix(
+                vsix,
+                {
+                    "publisher": "acme",
+                    "name": "large-source",
+                    "version": "1.0.0",
+                    "main": "./out/extension.js",
+                    "activationEvents": [],
+                    "engines": {"vscode": "^1.90.0"},
+                },
+                {"extension/out/extension.js": source},
+            )
+
+            relaxed = subprocess.run(
+                [sys.executable, "-m", "red_widow", str(vsix), "--format", "json"],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            strict = subprocess.run(
+                [sys.executable, "-m", "red_widow", str(vsix), "--format", "json", "--strict"],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            strict_text = subprocess.run(
+                [sys.executable, "-m", "red_widow", str(vsix), "--strict"],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(relaxed.returncode, 0, relaxed.stderr)
+        self.assertEqual(strict.returncode, 2, strict.stderr)
+        payload = json.loads(strict.stdout)
+        self.assertTrue(payload["reports"][0]["scanWarnings"])
+        self.assertEqual(strict_text.returncode, 2, strict_text.stderr)
+        self.assertIn("Decision: BLOCK", strict_text.stdout)
+        self.assertIn("strict mode", strict_text.stdout)
+
+    def test_cli_rejects_strict_diff_until_diff_warning_semantics_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            old = Path(temp_dir) / "old.vsix"
+            new = Path(temp_dir) / "new.vsix"
+            manifest = {
+                "publisher": "acme",
+                "name": "strict-diff",
+                "version": "1.0.0",
+                "activationEvents": [],
+                "engines": {"vscode": "^1.90.0"},
+            }
+            _write_vsix(old, manifest, {"extension/out/extension.js": "console.log('old');\n"})
+            updated_manifest = dict(manifest)
+            updated_manifest["version"] = "1.0.1"
+            _write_vsix(new, updated_manifest, {"extension/out/extension.js": "console.log('new');\n"})
+
+            result = subprocess.run(
+                [sys.executable, "-m", "red_widow", "--diff", str(old), str(new), "--strict"],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--diff cannot be combined", result.stderr)
+
+    def test_strict_gate_blocks_scan_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vsix = Path(temp_dir) / "large-source.vsix"
+            source = ("const value = 'red-widow';\n" * 70_000)
+            _write_vsix(
+                vsix,
+                {
+                    "publisher": "acme",
+                    "name": "large-source",
+                    "version": "1.0.0",
+                    "main": "./out/extension.js",
+                    "activationEvents": [],
+                    "engines": {"vscode": "^1.90.0"},
+                },
+                {"extension/out/extension.js": source},
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    str(vsix),
+                    "--strict",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["decision"], "BLOCK")
+        self.assertTrue(payload["reports"][0]["scanWarnings"])
+        self.assertIn("strict-scan-warning", {item["ruleId"] for item in payload["blockingItems"]})
+
+    def test_strict_gate_blocks_scan_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_target = Path(temp_dir) / "bad.vsix"
+            bad_target.write_text("not a zip", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    str(bad_target),
+                    "--strict",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["decision"], "BLOCK")
+        self.assertIn("strict-scan-error", {item["ruleId"] for item in payload["blockingItems"]})
+
+    def test_gate_scan_errors_are_review_not_pass_in_non_strict_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bad_target = Path(temp_dir) / "bad.vsix"
+            bad_target.write_text("not a zip", encoding="utf-8")
+
+            text_result = subprocess.run(
+                [sys.executable, "-m", "red_widow", "gate", str(bad_target)],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            json_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "gate",
+                    str(bad_target),
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(text_result.returncode, 1, text_result.stderr)
+        self.assertIn("Decision: REVIEW - scan coverage incomplete", text_result.stdout)
+        self.assertIn("Next: Fix scan errors", text_result.stdout)
+        payload = json.loads(json_result.stdout)
+        self.assertEqual(json_result.returncode, 1, json_result.stderr)
+        self.assertEqual(payload["decision"], "REVIEW")
+        self.assertTrue(payload["hasReview"])
+        self.assertFalse(payload["shouldBlock"])
+        self.assertEqual(payload["summary"]["scanErrors"], 1)
 
     def test_gate_offline_unresolved_recommendation_reviews_and_can_fail(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -974,6 +1340,8 @@ panel.webview.onDidReceiveMessage(() => {});
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["decision"], "REVIEW")
         self.assertIn("offline mode", payload["reviewItems"][0]["detail"])
+        self.assertIn("explicit extension recommendation files", payload["inspected"])
+        self.assertIn("marketplace package downloads because --offline is set", payload["skipped"])
 
     def test_gate_marketplace_resolution_failure_reviews_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1701,7 +2069,10 @@ panel.webview.onDidReceiveMessage(() => {});
             )
 
         self.assertEqual(markdown_result.returncode, 2, markdown_result.stderr)
+        self.assertIn("Intent: gate IDE extension", markdown_result.stdout)
         self.assertIn("Decision: **BLOCK**", markdown_result.stdout)
+        self.assertIn("Next: Fix or approve blocking items", markdown_result.stdout)
+        self.assertIn("Inspected:", markdown_result.stdout)
         self.assertIn("mcp-stdio-command", markdown_result.stdout)
         self.assertEqual(sarif_result.returncode, 2, sarif_result.stderr)
         sarif_payload = json.loads(sarif_result.stdout)
@@ -2013,7 +2384,9 @@ exports.activate = function activate() {
 
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("Red Widow dynamic sandbox", result.stdout)
+        self.assertIn("Intent: run extension activation", result.stdout)
         self.assertIn("Decision: BLOCK", result.stdout)
+        self.assertIn("Next: Fix blocking runtime behavior", result.stdout)
         self.assertIn("Run artifacts: discarded", result.stdout)
         self.assertIn("Summary:", result.stdout)
         self.assertIn("Blocking violations:", result.stdout)
@@ -2210,6 +2583,72 @@ exports.activate = function activate(context) {
 
         self.assertIn("harness did not write a report", report.errors)
         self.assertIn("harness-error", {violation.rule_id for violation in report.violations})
+
+    def test_cli_dynamic_strict_blocks_harness_errors(self) -> None:
+        true_bin = shutil.which("true")
+        if true_bin is None:
+            self.skipTest("true executable is required for this harness failure test")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vsix = Path(temp_dir) / "strict-no-report.vsix"
+            _write_vsix(
+                vsix,
+                {
+                    "publisher": "acme",
+                    "name": "strict-no-report",
+                    "version": "1.0.0",
+                    "main": "./out/extension.js",
+                    "activationEvents": ["*"],
+                    "engines": {"vscode": "^1.90.0"},
+                },
+                {"extension/out/extension.js": "exports.activate = function activate() {};\n"},
+            )
+
+            json_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "run",
+                    str(vsix),
+                    "--node",
+                    true_bin,
+                    "--strict",
+                    "--format",
+                    "json",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            text_result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "red_widow",
+                    "run",
+                    str(vsix),
+                    "--node",
+                    true_bin,
+                    "--strict",
+                ],
+                cwd=Path(__file__).parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(json_result.returncode, 2, json_result.stderr)
+        payload = json.loads(json_result.stdout)
+        self.assertTrue(payload["shouldBlock"])
+        harness_errors = [
+            violation for violation in payload["violations"] if violation["ruleId"] == "harness-error"
+        ]
+        self.assertTrue(harness_errors)
+        self.assertTrue(all(violation["blocking"] for violation in harness_errors))
+        self.assertEqual(text_result.returncode, 2, text_result.stderr)
+        self.assertIn("Decision: BLOCK - dynamic harness error is blocking in strict mode", text_result.stdout)
+        self.assertIn("Next: Fix dynamic harness errors", text_result.stdout)
 
     def test_dynamic_run_detects_vscode_workspace_fs_canary_read(self) -> None:
         if shutil.which("node") is None:

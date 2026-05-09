@@ -1,7 +1,9 @@
 # Red Widow CI
 
-Use the first-party GitHub Action to block risky IDE extension, MCP, and AI
-developer workflow changes before they reach developer machines.
+Use the first-party GitHub Action to gate repo workflow risk before extension,
+MCP, and AI-IDE changes reach developer machines. The action runs `gate` and
+`inventory`: it checks repo config, checked-in non-ignored VSIX packages,
+lockfile drift, unresolved recommendations, and SARIF output.
 
 ```yaml
 name: Red Widow
@@ -21,9 +23,17 @@ jobs:
           workspace: .
           policy: examples/policy.example.json
           offline: "true"
+          strict: "true"
           fail-on-review: "true"
           upload-sarif: "true"
 ```
+
+Offline CI does not download marketplace packages. It blocks unresolved
+recommendations when `fail-on-review: "true"` is set; set `offline: "false"`
+when CI is allowed to download and inspect recommended marketplace packages.
+`gate --strict` blocks incomplete static coverage such as scan errors and
+truncation warnings. Dynamic sandbox runs use `red-widow run --strict` and are
+not part of the GitHub Action yet.
 
 The action writes:
 
@@ -36,8 +46,8 @@ The action writes:
 For local CI scripts, run the same gate directly:
 
 ```bash
-red-widow gate --workspace . --policy examples/policy.example.json --offline --fail-on-review
-red-widow gate --workspace . --format sarif > red-widow.sarif
+red-widow gate --workspace . --policy examples/policy.example.json --offline --strict --fail-on-review
+red-widow gate --workspace . --policy examples/policy.example.json --offline --strict --fail-on-review --format sarif > red-widow.sarif
 red-widow inventory --workspace . --no-installed --format json > red-widow-inventory.json
 ```
 
