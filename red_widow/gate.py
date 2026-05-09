@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import subprocess
 from contextlib import suppress
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -82,6 +84,8 @@ class GateReport:
     info_items: list[GateItem] = field(default_factory=list)
     blocking_items: list[GateItem] = field(default_factory=list)
     review_items: list[GateItem] = field(default_factory=list)
+    inspected: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
 
     @property
     def should_block(self) -> bool:
@@ -91,7 +95,7 @@ class GateReport:
 
     @property
     def has_review(self) -> bool:
-        if self.review_items:
+        if self.scan_errors or self.review_items:
             return True
         return any(any(not finding.blocking for finding in report.findings) for report in self.reports)
 
@@ -107,6 +111,8 @@ class GateReport:
     def reason(self) -> str:
         if self.should_block:
             return "blocking IDE extension risk found"
+        if self.scan_errors:
+            return "scan coverage incomplete"
         if self.has_review:
             return "IDE extension trust changes need review"
         return "no IDE extension gate issues found"
@@ -148,6 +154,8 @@ class GateReport:
             "infoItems": [item.to_dict() for item in self.info_items],
             "blockingItems": [item.to_dict() for item in self.blocking_items],
             "reviewItems": [item.to_dict() for item in self.review_items],
+            "inspected": self.inspected,
+            "skipped": self.skipped,
         }
 
 
@@ -167,6 +175,16 @@ class _MarketplaceResolutionOptions:
     workspaces: list[Path]
     cache_dir: str | Path | None
     continue_on_error: bool
+
+
+@dataclass(frozen=True)
+class _IgnoreRule:
+    base: str
+    pattern: str
+    negated: bool = False
+    directory_only: bool = False
+    anchored: bool = False
+    has_slash: bool = False
 
 
 def run_gate(
@@ -193,6 +211,7 @@ def run_gate(
     scan_targets, installed_targets = _collect_gate_targets(inputs, installed=installed)
 
     report = GateReport()
+    _set_gate_scope(report, inputs, installed=installed, offline=offline)
     _scan_gate_targets(
         report,
         scan_targets,
@@ -204,6 +223,8 @@ def run_gate(
     recommendations = _load_recommendations(inputs.workspaces, inputs.recommendations)
     _set_recommendations(report, recommendations, lockfile)
 
+    marketplace_candidates = _marketplace_candidate_ids(report, policy, lockfile)
+    _set_marketplace_scope(report, marketplace_candidates, offline=offline)
     _resolve_gate_marketplace_packages(
         report,
         recommendations,
@@ -225,6 +246,39 @@ def run_gate(
     _add_ai_ide_items(report, _ai_ide_workspaces(inputs, installed=installed), include_global=installed)
     _add_recommendation_items(report, policy, lockfile, offline=offline)
     return report
+
+
+def _set_gate_scope(report: GateReport, inputs: _GateInputs, *, installed: bool, offline: bool) -> None:
+    inspected: list[str] = []
+    skipped: list[str] = []
+
+    if inputs.workspaces:
+        inspected.extend(
+            [
+                "workspace extension recommendations",
+                "non-ignored checked-in VSIX packages",
+                "VS Code/Cursor/Windsurf MCP, tasks, settings, rules, hooks, and agent files",
+            ]
+        )
+    if inputs.recommendations:
+        inspected.append("explicit extension recommendation files")
+    if inputs.targets:
+        inspected.append("explicit VSIX or extension directory targets")
+    if installed:
+        inspected.append("installed VS Code-compatible extensions and global AI-IDE config")
+    else:
+        skipped.append("installed extensions and global AI-IDE config unless --installed is set")
+    report.inspected = inspected
+    report.skipped = skipped
+
+
+def _set_marketplace_scope(report: GateReport, marketplace_candidates: list[str], *, offline: bool) -> None:
+    if not marketplace_candidates:
+        return
+    if offline:
+        report.skipped.append("marketplace package downloads because --offline is set")
+    else:
+        report.inspected.append("marketplace resolution for unresolved recommendations")
 
 
 def _normalize_gate_inputs(
@@ -365,21 +419,185 @@ def _discover_workspace_vsix_targets(workspaces: list[Path]) -> list[Path]:
     for workspace in workspaces:
         if not workspace.is_dir():
             continue
+        candidates: list[Path] = []
         with suppress(OSError):
             iterator = workspace.rglob("*.vsix")
             for path in iterator:
-                if not path.is_file() or _is_skipped_workspace_path(path, workspace):
+                if not path.is_file() or _is_workspace_skip_dir_path(path, workspace):
                     continue
-                targets.append(path)
+                candidates.append(path)
+        ignored = _ignored_workspace_paths(candidates, workspace)
+        targets.extend(
+            path
+            for path in candidates
+            if _workspace_relative_posix(path, workspace) not in ignored
+        )
     return sorted(targets)
 
 
-def _is_skipped_workspace_path(path: Path, workspace: Path) -> bool:
+def _is_workspace_skip_dir_path(path: Path, workspace: Path) -> bool:
     try:
         relative = path.relative_to(workspace)
     except ValueError:
         return True
     return any(part in WORKSPACE_SCAN_SKIP_DIRS for part in relative.parts)
+
+
+def _ignored_workspace_paths(paths: list[Path], workspace: Path) -> set[str]:
+    git_ignored = _git_check_ignored_paths(paths, workspace)
+    if git_ignored is not None:
+        return git_ignored
+    return _fallback_ignored_workspace_paths(paths, workspace)
+
+
+def _git_check_ignored_paths(paths: list[Path], workspace: Path) -> set[str] | None:
+    if not paths:
+        return set()
+    relative_paths = [_workspace_relative_posix(path, workspace) for path in paths]
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "--no-index", "--stdin"],
+            cwd=workspace,
+            input="\n".join(relative_paths) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    if completed.returncode not in {0, 1}:
+        return None
+    return {line for line in completed.stdout.splitlines() if line}
+
+
+def _fallback_ignored_workspace_paths(paths: list[Path], workspace: Path) -> set[str]:
+    rules = _workspace_ignore_rules(str(workspace.expanduser().resolve(strict=False)))
+    ignored: set[str] = set()
+    for path in paths:
+        relative = _workspace_relative_posix(path, workspace)
+        if _fallback_path_ignored(relative, rules):
+            ignored.add(relative)
+    return ignored
+
+
+@lru_cache(maxsize=128)
+def _workspace_ignore_rules(workspace: str) -> tuple[_IgnoreRule, ...]:
+    root = Path(workspace)
+    ignore_files = [root / ".gitignore"]
+    with suppress(OSError):
+        for path in root.rglob(".gitignore"):
+            if path == root / ".gitignore" or _is_workspace_skip_dir_path(path, root):
+                continue
+            ignore_files.append(path)
+
+    rules: list[_IgnoreRule] = []
+    for ignore_file in ignore_files:
+        if not ignore_file.is_file():
+            continue
+        try:
+            lines = ignore_file.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        base = ignore_file.parent.relative_to(root).as_posix()
+        base = "" if base == "." else base
+        for line in lines:
+            rule = _parse_gitignore_rule(base, line)
+            if rule:
+                rules.append(rule)
+    return tuple(rules)
+
+
+def _parse_gitignore_rule(base: str, line: str) -> _IgnoreRule | None:
+    pattern = line.strip()
+    if not pattern or pattern.startswith("#"):
+        return None
+    if pattern.startswith("\\#") or pattern.startswith("\\!"):
+        pattern = pattern[1:]
+
+    negated = pattern.startswith("!")
+    if negated:
+        pattern = pattern[1:].strip()
+    if not pattern:
+        return None
+
+    directory_only = pattern.endswith("/")
+    pattern = pattern.rstrip("/")
+    anchored = pattern.startswith("/")
+    pattern = pattern.lstrip("/")
+    if not pattern:
+        return None
+    return _IgnoreRule(
+        base=base,
+        pattern=pattern,
+        negated=negated,
+        directory_only=directory_only,
+        anchored=anchored,
+        has_slash="/" in pattern,
+    )
+
+
+def _fallback_path_ignored(relative_posix: str, rules: tuple[_IgnoreRule, ...]) -> bool:
+    ignored = False
+    for rule in rules:
+        if _ignore_rule_matches(relative_posix, rule):
+            ignored = not rule.negated
+    return ignored
+
+
+def _ignore_rule_matches(relative_posix: str, rule: _IgnoreRule) -> bool:
+    candidate = _relative_to_ignore_base(relative_posix, rule.base)
+    if candidate is None:
+        return False
+    candidate_parts = candidate.split("/") if candidate else []
+    pattern_parts = rule.pattern.split("/")
+    if not candidate_parts:
+        return False
+
+    if rule.directory_only:
+        directory_parts = candidate_parts[:-1]
+        if rule.anchored or rule.has_slash:
+            return any(
+                _glob_segments_match(directory_parts[:index], pattern_parts)
+                for index in range(1, len(directory_parts) + 1)
+            )
+        return any(fnmatch.fnmatchcase(part, rule.pattern) for part in directory_parts)
+
+    if rule.anchored or rule.has_slash:
+        return _glob_segments_match(candidate_parts, pattern_parts)
+    return any(fnmatch.fnmatchcase(part, rule.pattern) for part in candidate_parts)
+
+
+def _relative_to_ignore_base(relative_posix: str, base: str) -> str | None:
+    if not base:
+        return relative_posix
+    if relative_posix == base:
+        return ""
+    prefix = base + "/"
+    if not relative_posix.startswith(prefix):
+        return None
+    return relative_posix[len(prefix):]
+
+
+def _glob_segments_match(path_parts: list[str], pattern_parts: list[str]) -> bool:
+    if not pattern_parts:
+        return not path_parts
+    if pattern_parts[0] == "**":
+        return (
+            _glob_segments_match(path_parts, pattern_parts[1:])
+            or bool(path_parts and _glob_segments_match(path_parts[1:], pattern_parts))
+        )
+    if not path_parts:
+        return False
+    if not fnmatch.fnmatchcase(path_parts[0], pattern_parts[0]):
+        return False
+    return _glob_segments_match(path_parts[1:], pattern_parts[1:])
+
+
+def _workspace_relative_posix(path: Path, workspace: Path) -> str:
+    try:
+        return path.relative_to(workspace).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:

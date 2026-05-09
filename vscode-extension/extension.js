@@ -6,6 +6,7 @@ const vscode = require("vscode");
 const CONFIG_SECTION = "redWidow";
 const DIAGNOSTIC_SOURCE = "red-widow";
 const OUTPUT_NAME = "Red Widow";
+const GATE_INTENT = "Intent: gate IDE extension, MCP, and AI workflow changes before they reach developers or CI.";
 const WATCH_PATTERNS = [
   ".vscode/extensions.json",
   ".vscode/mcp.json",
@@ -156,6 +157,9 @@ function executeGate(folder) {
   }
   if (cfg.get("failOnReview", false)) {
     args.push("--fail-on-review");
+  }
+  if (cfg.get("strict", false)) {
+    args.push("--strict");
   }
   if (cfg.get("includeInstalled", false)) {
     args.push("--installed");
@@ -342,7 +346,11 @@ function updateStatus(state, reportOrMessage) {
     const report = reportOrMessage;
     const decision = String(report.decision || "UNKNOWN");
     statusBar.text = `${iconForDecision(decision)} Red Widow ${decision}`;
-    statusBar.tooltip = `${report.reason || "Red Widow gate complete"}\n${summaryLine(report.summary || {})}`;
+    statusBar.tooltip = [
+      report.reason || "Red Widow gate complete",
+      nextAction(report),
+      summaryLine(report.summary || {}),
+    ].join("\n");
     statusBar.backgroundColor = decision === "BLOCK"
       ? new vscode.ThemeColor("statusBarItem.errorBackground")
       : decision === "REVIEW"
@@ -374,9 +382,17 @@ function renderReport(report) {
   const summary = report.summary || {};
   const lines = [
     "Red Widow gate",
+    GATE_INTENT,
     `Decision: ${report.decision || "UNKNOWN"} - ${report.reason || ""}`,
-    `Summary: ${summaryLine(summary)}`,
+    nextAction(report),
   ];
+  if (Array.isArray(report.inspected) && report.inspected.length) {
+    lines.push(`Inspected: ${report.inspected.join("; ")}`);
+  }
+  if (Array.isArray(report.skipped) && report.skipped.length) {
+    lines.push(`Skipped: ${report.skipped.join("; ")}`);
+  }
+  lines.push(`Summary: ${summaryLine(summary)}`);
   appendItems(lines, "Blocking items", report.blockingItems || []);
   appendItems(lines, "Review items", report.reviewItems || []);
   appendFindings(lines, report.reports || []);
@@ -456,6 +472,19 @@ function summaryLine(summary) {
     `${summary.reviewItems || 0} review`,
     `${summary.scanErrors || 0} errors`,
   ].join(", ");
+}
+
+function nextAction(report) {
+  if (report.shouldBlock) {
+    return "Next: fix or approve blocking items, then rerun the gate.";
+  }
+  if (report.scanErrors && report.scanErrors.length) {
+    return "Next: fix scan errors and rerun; enable strict mode in CI to block incomplete static coverage.";
+  }
+  if (report.hasReview) {
+    return "Next: review unresolved or changed trust items; enable failOnReview when review must block.";
+  }
+  return "Next: no action required; approve resolved extension packages when ready.";
 }
 
 function outputLine(text) {

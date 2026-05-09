@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .messages import GATE_INTENT, gate_next_action
 from .models import Finding, PolicyViolation, SCHEMA_VERSION, ScanReport
 
 
@@ -96,19 +97,31 @@ def gate_markdown(report: Any) -> str:
     lines = [
         "# Red Widow gate",
         "",
+        GATE_INTENT,
+        "",
         f"Decision: **{_escape_md(report.decision)}** - {_escape_md(report.reason)}",
         "",
-        "| Metric | Count |",
-        "| --- | ---: |",
-        f"| Scanned packages | {summary['scannedPackages']} |",
-        f"| Recommendations | {summary['recommendations']} |",
-        f"| Marketplace packages | {summary['marketplacePackages']} |",
-        f"| Info items | {summary.get('infoItems', 0)} |",
-        f"| Blocking items | {summary['blockingItems']} |",
-        f"| Review items | {summary['reviewItems']} |",
-        f"| Scan errors | {summary['scanErrors']} |",
-        "",
+        f"Next: {_escape_md(gate_next_action(report))}",
     ]
+    if getattr(report, "inspected", None):
+        lines.extend(["", f"Inspected: {_escape_md('; '.join(report.inspected))}"])
+    if getattr(report, "skipped", None):
+        lines.extend(["", f"Skipped: {_escape_md('; '.join(report.skipped))}"])
+    lines.extend(
+        [
+            "",
+            "| Metric | Count |",
+            "| --- | ---: |",
+            f"| Scanned packages | {summary['scannedPackages']} |",
+            f"| Recommendations | {summary['recommendations']} |",
+            f"| Marketplace packages | {summary['marketplacePackages']} |",
+            f"| Info items | {summary.get('infoItems', 0)} |",
+            f"| Blocking items | {summary['blockingItems']} |",
+            f"| Review items | {summary['reviewItems']} |",
+            f"| Scan errors | {summary['scanErrors']} |",
+            "",
+        ]
+    )
 
     blocking_items = [
         *report.blocking_items,

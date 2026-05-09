@@ -1,7 +1,7 @@
 {
   "name": "red-widow",
   "displayName": "Red Widow",
-  "description": "Gate VS Code-compatible IDE extensions, MCP config, and AI developer workflow risk from inside the editor.",
+  "description": "Runs the local Red Widow CLI to gate workspace extension recommendations, MCP config, agent rules, and checked-in VSIX packages from Problems.",
   "version": "0.1.1",
   "publisher": "oha",
   "license": "MIT",
@@ -88,6 +88,11 @@
           "type": "boolean",
           "default": false,
           "description": "Treat REVIEW decisions as failing gate runs."
+        },
+        "redWidow.strict": {
+          "type": "boolean",
+          "default": false,
+          "description": "Treat scan errors and scan truncation warnings as blocking."
         },
         "redWidow.includeInstalled": {
           "type": "boolean",

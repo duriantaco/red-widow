@@ -266,6 +266,7 @@ class ScanReport:
     total_size: int = 0
     domains: tuple[str, ...] = ()
     native_binaries: tuple[str, ...] = ()
+    scan_warnings: list[str] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -314,6 +315,7 @@ class ScanReport:
             "risk": {"label": self.risk_label, "score": self.risk_score},
             "domains": list(self.domains),
             "nativeBinaries": list(self.native_binaries),
+            "scanWarnings": self.scan_warnings,
             "findings": [finding.to_dict() for finding in self.findings],
         }
 
